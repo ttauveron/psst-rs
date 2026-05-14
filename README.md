@@ -129,7 +129,7 @@ Tests currently cover:
 By default, the application tries to use `/var/lib/psst-rs/secrets.db`, which is not convenient for development. For a local test, use a path in `/tmp`.
 
 ```bash
-SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db cargo run
+PSST_RS_DATABASE_PATH=/tmp/psst-rs-dev.db cargo run
 ```
 
 The server then listens on:
@@ -158,7 +158,7 @@ ok
 1. Start the server locally:
 
    ```bash
-   SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db cargo run
+   PSST_RS_DATABASE_PATH=/tmp/psst-rs-dev.db cargo run
    ```
 
 2. Open `http://127.0.0.1:3000/`.
@@ -175,11 +175,11 @@ ok
    https://example.tld/s/<id>#<key>
    ```
 
-   Locally, the link host depends on `SECRET_RS_PUBLIC_BASE_URL`. By default it is `https://example.tld`. For a more natural local test you can run:
+   Locally, the link host depends on `PSST_RS_PUBLIC_BASE_URL`. By default it is `https://example.tld`. For a more natural local test you can run:
 
    ```bash
-   SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db \
-   SECRET_RS_PUBLIC_BASE_URL=http://127.0.0.1:3000 \
+   PSST_RS_DATABASE_PATH=/tmp/psst-rs-dev.db \
+   PSST_RS_PUBLIC_BASE_URL=http://127.0.0.1:3000 \
    cargo run
    ```
 
@@ -192,10 +192,10 @@ Two simple options:
 1. use Cloudflare test keys locally:
 
    ```bash
-   SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db \
-   SECRET_RS_PUBLIC_BASE_URL=http://127.0.0.1:3000 \
-   SECRET_RS_TURNSTILE_SITE_KEY=1x00000000000000000000AA \
-   SECRET_RS_TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA \
+   PSST_RS_DATABASE_PATH=/tmp/psst-rs-dev.db \
+   PSST_RS_PUBLIC_BASE_URL=http://127.0.0.1:3000 \
+   PSST_RS_TURNSTILE_SITE_KEY=1x00000000000000000000AA \
+   PSST_RS_TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA \
    cargo run
    ```
 
@@ -225,8 +225,8 @@ Important: the `delete_token` is only kept in memory in the current browser. If 
 Run the server with:
 
 ```bash
-SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db \
-SECRET_RS_ENABLE_CREATE=false \
+PSST_RS_DATABASE_PATH=/tmp/psst-rs-dev.db \
+PSST_RS_ENABLE_CREATE=false \
 cargo run
 ```
 
@@ -255,17 +255,17 @@ Expected effect:
 
 ## Useful Environment Variables For Development
 
-- `SECRET_RS_DATABASE_PATH`: SQLite file path
-- `SECRET_RS_PUBLIC_BASE_URL`: base used to build the final link
-- `SECRET_RS_BIND_ADDR`: listening address, default `127.0.0.1:3000`
-- `SECRET_RS_ENABLE_CREATE`: enable or disable creation
-- `SECRET_RS_MAX_SECRET_BYTES`: cleartext limit before encryption, default `16384`
-- `SECRET_RS_TURNSTILE_SITE_KEY`: Turnstile public key
-- `SECRET_RS_TURNSTILE_SECRET_KEY`: Turnstile private key
-- `SECRET_RS_IP_HASH_SALT`: server salt used to pseudonymize IPs
-- `SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE`: create limit per minute per hashed IP, default `5`
-- `SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR`: create limit per hour per hashed IP, default `30`
-- `SECRET_RS_READ_RATE_LIMIT_PER_MINUTE`: soft read limit per minute per hashed IP, default `60`
+- `PSST_RS_DATABASE_PATH`: SQLite file path
+- `PSST_RS_PUBLIC_BASE_URL`: base used to build the final link
+- `PSST_RS_BIND_ADDR`: listening address, default `127.0.0.1:3000`
+- `PSST_RS_ENABLE_CREATE`: enable or disable creation
+- `PSST_RS_MAX_SECRET_BYTES`: cleartext limit before encryption, default `16384`
+- `PSST_RS_TURNSTILE_SITE_KEY`: Turnstile public key
+- `PSST_RS_TURNSTILE_SECRET_KEY`: Turnstile private key
+- `PSST_RS_IP_HASH_SALT`: server salt used to pseudonymize IPs
+- `PSST_RS_CREATE_RATE_LIMIT_PER_MINUTE`: create limit per minute per hashed IP, default `5`
+- `PSST_RS_CREATE_RATE_LIMIT_PER_HOUR`: create limit per hour per hashed IP, default `30`
+- `PSST_RS_READ_RATE_LIMIT_PER_MINUTE`: soft read limit per minute per hashed IP, default `60`
 
 ## Rate limiting
 

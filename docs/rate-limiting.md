@@ -14,16 +14,16 @@ These values are configurable through environment variables.
 
 ## Configuration Variables
 
-- `SECRET_RS_IP_HASH_SALT`
+- `PSST_RS_IP_HASH_SALT`
   Required server-side salt used to pseudonymize the client IP before storing or counting it.
 
-- `SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE`
+- `PSST_RS_CREATE_RATE_LIMIT_PER_MINUTE`
   Creation limit per minute. Default: `5`.
 
-- `SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR`
+- `PSST_RS_CREATE_RATE_LIMIT_PER_HOUR`
   Creation limit per hour. Default: `30`.
 
-- `SECRET_RS_READ_RATE_LIMIT_PER_MINUTE`
+- `PSST_RS_READ_RATE_LIMIT_PER_MINUTE`
   Soft read limit per minute. Default: `60`.
 
 ## Counting Key
@@ -33,7 +33,7 @@ Rate limiting never stores the raw IP.
 The server:
 
 - extracts the client IP through trusted proxies;
-- computes a pseudonymized identifier from the IP and `SECRET_RS_IP_HASH_SALT`;
+- computes a pseudonymized identifier from the IP and `PSST_RS_IP_HASH_SALT`;
 - uses that identifier as the logical key for rate-limit buckets.
 
 Secrets themselves also keep `requester_ip_hash` in the database for future abuse-mitigation use cases.
