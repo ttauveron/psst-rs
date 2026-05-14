@@ -1151,6 +1151,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_route_allows_multiple_requests_without_client_ip_context() {
+        let verifier = start_turnstile_test_server(TurnstileScenario::Success).await;
+        let mut config = AppConfig::default();
+        config.turnstile_verify_url = verifier.url.clone();
+        config.create_rate_limit_per_minute = 1;
+        config.create_rate_limit_per_hour = 1;
+        let (_guard, app, _database) = test_router("create-no-client-ip", config);
+
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/api/create")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"valid-turnstile-token"}"#,
+                        ))
+                        .expect("request should build"),
+                )
+                .await
+                .expect("router should respond");
+
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+    }
+
+    #[tokio::test]
+    async fn create_route_global_quota_still_returns_503_with_client_ip_context() {
+        let mut config = AppConfig::default();
+        config.global_max_active_secrets = 1;
+        config.create_rate_limit_per_minute = 1;
+        config.create_rate_limit_per_hour = 1;
+        let (_guard, app, database) = test_router("active-secret-quota-with-ip", config);
+        let _existing = insert_test_secret(
+            &database,
+            "ciphertext-existing",
+            "nonce-existing",
+            current_timestamp().expect("current timestamp should exist") + 3600,
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/create")
+                    .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 12345))))
+                    .header("cf-connecting-ip", "203.0.113.10")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":900,"turnstile_token":"dummy-token"}"#,
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
     async fn create_route_rejects_when_global_active_secret_quota_is_reached() {
         let mut config = AppConfig::default();
         config.global_max_active_secrets = 1;
@@ -1322,6 +1384,34 @@ mod tests {
 
         assert_eq!(first_response.status(), StatusCode::OK);
         assert_eq!(second_response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn read_route_allows_multiple_requests_without_client_ip_context() {
+        let mut config = AppConfig::default();
+        config.read_rate_limit_per_minute = 1;
+        let (_guard, app, database) = test_router("read-no-client-ip", config);
+        let now_timestamp = current_timestamp().expect("current timestamp should exist");
+        let first_secret =
+            insert_test_secret(&database, "ciphertext-three", "nonce-three", now_timestamp + 60);
+        let second_secret =
+            insert_test_secret(&database, "ciphertext-four", "nonce-four", now_timestamp + 60);
+
+        for secret_id in [&first_secret.secret_id, &second_secret.secret_id] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::GET)
+                        .uri(format!("/api/secrets/{secret_id}"))
+                        .body(Body::empty())
+                        .expect("request should build"),
+                )
+                .await
+                .expect("router should respond");
+
+            assert_eq!(response.status(), StatusCode::OK);
+        }
     }
 
     #[tokio::test]
