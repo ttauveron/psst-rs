@@ -281,6 +281,22 @@
         mode: "0644"
       notify: Reload nginx
 
+    - name: Install logrotate configuration for psst-rs
+      ansible.builtin.template:
+        src: "templates/logrotate-psst-rs.j2"
+        dest: "/etc/logrotate.d/psst-rs"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install logrotate configuration for nginx
+      ansible.builtin.template:
+        src: "templates/logrotate-nginx.j2"
+        dest: "/etc/logrotate.d/nginx"
+        owner: root
+        group: root
+        mode: "0644"
+
     - name: Enable psst-rs service at boot
       ansible.builtin.service:
         name: "{{ psst_app_name }}"

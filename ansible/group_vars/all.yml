@@ -6,6 +6,7 @@ psst_packages:
   - ca-certificates
   - libgcc
   - libstdc++
+  - logrotate
   - nginx
 
 psst_use_terraform_outputs: true

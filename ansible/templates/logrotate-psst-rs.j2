@@ -1,0 +1,9 @@
+{{ psst_log_dir }}/*.log {
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
