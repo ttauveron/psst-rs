@@ -273,6 +273,10 @@ button:focus-visible {
   gap: 0.75rem;
 }
 
+.turnstile-shell {
+  margin-top: 1rem;
+}
+
 button {
   appearance: none;
   border: 1px solid transparent;

@@ -34,6 +34,8 @@ psst_openrc_service_path: "/etc/init.d/psst-rs"
 psst_nginx_vhost_path: "/etc/nginx/http.d/psst-rs.conf"
 
 psst_enable_create: true
+psst_turnstile_site_key: "{{ lookup('env', 'PSST_TURNSTILE_SITE_KEY') | default('', true) }}"
+psst_turnstile_secret_key: "{{ lookup('env', 'PSST_TURNSTILE_SECRET_KEY') | default('', true) }}"
 psst_max_secret_bytes: 16384
 psst_max_ciphertext_bytes: 32768
 psst_default_ttl_seconds: 86400

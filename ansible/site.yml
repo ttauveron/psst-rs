@@ -74,6 +74,14 @@
       loop: "{{ psst_local_tls_artifacts.results | default([]) }}"
       when: psst_tls_cert_content is not defined or psst_tls_key_content is not defined
 
+    - name: Assert Turnstile keys are configured when creation is enabled
+      ansible.builtin.assert:
+        that:
+          - psst_turnstile_site_key | trim | length > 0
+          - psst_turnstile_secret_key | trim | length > 0
+        fail_msg: "Turnstile keys must be provided when psst_enable_create is true."
+      when: psst_enable_create
+
   tasks:
     - name: Install runtime packages
       ansible.builtin.package:

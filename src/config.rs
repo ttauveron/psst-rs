@@ -18,6 +18,8 @@ const DEFAULT_ENABLE_CREATE: bool = true;
 const DEFAULT_GLOBAL_MAX_ACTIVE_SECRETS: u64 = 10_000;
 const DEFAULT_GLOBAL_MAX_STORAGE_BYTES: u64 = 50 * 1024 * 1024;
 const DEFAULT_TRUSTED_PROXY_IPS: &str = "127.0.0.1,::1";
+const DEFAULT_TURNSTILE_VERIFY_URL: &str =
+    "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -32,46 +34,79 @@ pub struct AppConfig {
     pub global_max_active_secrets: u64,
     pub global_max_storage_bytes: u64,
     pub trusted_proxy_ips: Vec<IpAddr>,
+    pub turnstile_site_key: String,
+    pub turnstile_secret_key: String,
+    pub turnstile_verify_url: String,
 }
 
 impl AppConfig {
     pub fn from_env() -> Result<Self> {
+        Self::from_lookup(|key| env::var(key).ok())
+    }
+
+    fn from_lookup<F>(get_var: F) -> Result<Self>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
         let config = Self {
-            bind_addr: env_or_parse("SECRET_RS_BIND_ADDR", DEFAULT_BIND_ADDR)?,
-            database_path: env_or_path("SECRET_RS_DATABASE_PATH", DEFAULT_DATABASE_PATH),
-            public_base_url: env_or_string("SECRET_RS_PUBLIC_BASE_URL", DEFAULT_PUBLIC_BASE_URL),
+            bind_addr: env_or_parse(&get_var, "SECRET_RS_BIND_ADDR", DEFAULT_BIND_ADDR)?,
+            database_path: env_or_path(&get_var, "SECRET_RS_DATABASE_PATH", DEFAULT_DATABASE_PATH),
+            public_base_url: env_or_string(
+                &get_var,
+                "SECRET_RS_PUBLIC_BASE_URL",
+                DEFAULT_PUBLIC_BASE_URL,
+            ),
             max_secret_bytes: env_or_parse(
+                &get_var,
                 "SECRET_RS_MAX_SECRET_BYTES",
                 DEFAULT_MAX_SECRET_BYTES.to_string().as_str(),
             )?,
             max_ciphertext_bytes: env_or_parse(
+                &get_var,
                 "SECRET_RS_MAX_CIPHERTEXT_BYTES",
                 DEFAULT_MAX_CIPHERTEXT_BYTES.to_string().as_str(),
             )?,
             default_ttl_seconds: env_or_parse(
+                &get_var,
                 "SECRET_RS_DEFAULT_TTL_SECONDS",
                 DEFAULT_DEFAULT_TTL_SECONDS.to_string().as_str(),
             )?,
             max_ttl_seconds: env_or_parse(
+                &get_var,
                 "SECRET_RS_MAX_TTL_SECONDS",
                 DEFAULT_MAX_TTL_SECONDS.to_string().as_str(),
             )?,
             enable_create: env_or_parse(
+                &get_var,
                 "SECRET_RS_ENABLE_CREATE",
-                if DEFAULT_ENABLE_CREATE { "true" } else { "false" },
+                if DEFAULT_ENABLE_CREATE {
+                    "true"
+                } else {
+                    "false"
+                },
             )?,
             global_max_active_secrets: env_or_parse(
+                &get_var,
                 "SECRET_RS_GLOBAL_MAX_ACTIVE_SECRETS",
                 DEFAULT_GLOBAL_MAX_ACTIVE_SECRETS.to_string().as_str(),
             )?,
             global_max_storage_bytes: env_or_parse(
+                &get_var,
                 "SECRET_RS_GLOBAL_MAX_STORAGE_BYTES",
                 DEFAULT_GLOBAL_MAX_STORAGE_BYTES.to_string().as_str(),
             )?,
             trusted_proxy_ips: env_or_ip_list(
+                &get_var,
                 "SECRET_RS_TRUSTED_PROXY_IPS",
                 DEFAULT_TRUSTED_PROXY_IPS,
             )?,
+            turnstile_site_key: env_or_string(&get_var, "SECRET_RS_TURNSTILE_SITE_KEY", ""),
+            turnstile_secret_key: env_or_string(&get_var, "SECRET_RS_TURNSTILE_SECRET_KEY", ""),
+            turnstile_verify_url: env_or_string(
+                &get_var,
+                "SECRET_RS_TURNSTILE_VERIFY_URL",
+                DEFAULT_TURNSTILE_VERIFY_URL,
+            ),
         };
 
         config.validate()?;
@@ -119,6 +154,18 @@ impl AppConfig {
             bail!("SECRET_RS_TRUSTED_PROXY_IPS must not be empty");
         }
 
+        if self.enable_create && self.turnstile_site_key.trim().is_empty() {
+            bail!("SECRET_RS_TURNSTILE_SITE_KEY must not be empty when creation is enabled");
+        }
+
+        if self.enable_create && self.turnstile_secret_key.trim().is_empty() {
+            bail!("SECRET_RS_TURNSTILE_SECRET_KEY must not be empty when creation is enabled");
+        }
+
+        if self.enable_create && self.turnstile_verify_url.trim().is_empty() {
+            bail!("SECRET_RS_TURNSTILE_VERIFY_URL must not be empty when creation is enabled");
+        }
+
         Ok(())
     }
 }
@@ -126,7 +173,9 @@ impl AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            bind_addr: DEFAULT_BIND_ADDR.parse().expect("default bind addr should parse"),
+            bind_addr: DEFAULT_BIND_ADDR
+                .parse()
+                .expect("default bind addr should parse"),
             database_path: PathBuf::from(DEFAULT_DATABASE_PATH),
             public_base_url: DEFAULT_PUBLIC_BASE_URL.to_owned(),
             max_secret_bytes: DEFAULT_MAX_SECRET_BYTES,
@@ -144,30 +193,43 @@ impl Default for AppConfig {
                     .parse()
                     .expect("default trusted proxy ip should parse"),
             ],
+            turnstile_site_key: "test-turnstile-site-key".to_owned(),
+            turnstile_secret_key: "test-turnstile-secret-key".to_owned(),
+            turnstile_verify_url: DEFAULT_TURNSTILE_VERIFY_URL.to_owned(),
         }
     }
 }
 
-fn env_or_string(key: &str, default: &str) -> String {
-    env::var(key).unwrap_or_else(|_| default.to_owned())
-}
-
-fn env_or_path(key: &str, default: &str) -> PathBuf {
-    PathBuf::from(env_or_string(key, default))
-}
-
-fn env_or_parse<T>(key: &str, default: &str) -> Result<T>
+fn env_or_string<F>(get_var: &F, key: &str, default: &str) -> String
 where
+    F: Fn(&str) -> Option<String>,
+{
+    get_var(key).unwrap_or_else(|| default.to_owned())
+}
+
+fn env_or_path<F>(get_var: &F, key: &str, default: &str) -> PathBuf
+where
+    F: Fn(&str) -> Option<String>,
+{
+    PathBuf::from(env_or_string(get_var, key, default))
+}
+
+fn env_or_parse<F, T>(get_var: &F, key: &str, default: &str) -> Result<T>
+where
+    F: Fn(&str) -> Option<String>,
     T: FromStr,
     T::Err: std::error::Error + Send + Sync + 'static,
 {
-    let raw = env_or_string(key, default);
+    let raw = env_or_string(get_var, key, default);
     raw.parse::<T>()
         .with_context(|| format!("invalid value for {key}: {raw}"))
 }
 
-fn env_or_ip_list(key: &str, default: &str) -> Result<Vec<IpAddr>> {
-    let raw = env_or_string(key, default);
+fn env_or_ip_list<F>(get_var: &F, key: &str, default: &str) -> Result<Vec<IpAddr>>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let raw = env_or_string(get_var, key, default);
     let mut ips = Vec::new();
 
     for value in raw.split(',') {
@@ -194,7 +256,12 @@ mod tests {
 
     #[test]
     fn loads_default_configuration() {
-        let config = AppConfig::from_env().expect("default config should load");
+        let config = AppConfig::from_lookup(|key| match key {
+            "SECRET_RS_TURNSTILE_SITE_KEY" => Some("site-key".to_owned()),
+            "SECRET_RS_TURNSTILE_SECRET_KEY" => Some("secret-key".to_owned()),
+            _ => None,
+        })
+        .expect("default config should load");
 
         assert_eq!(config.bind_addr.to_string(), "127.0.0.1:3000");
         assert_eq!(config.max_secret_bytes, 16 * 1024);
@@ -202,6 +269,19 @@ mod tests {
         assert_eq!(config.global_max_active_secrets, 10_000);
         assert_eq!(config.global_max_storage_bytes, 50 * 1024 * 1024);
         assert_eq!(config.trusted_proxy_ips.len(), 2);
+        assert_eq!(config.turnstile_site_key, "site-key");
+        assert_eq!(config.turnstile_secret_key, "secret-key");
+    }
+
+    #[test]
+    fn rejects_missing_turnstile_keys_when_creation_is_enabled() {
+        let error = AppConfig::from_lookup(|_| None).expect_err("config should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("SECRET_RS_TURNSTILE_SITE_KEY must not be empty")
+        );
     }
 
     #[test]
