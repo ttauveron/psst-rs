@@ -17,6 +17,9 @@ const DEFAULT_MAX_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_ENABLE_CREATE: bool = true;
 const DEFAULT_GLOBAL_MAX_ACTIVE_SECRETS: u64 = 10_000;
 const DEFAULT_GLOBAL_MAX_STORAGE_BYTES: u64 = 50 * 1024 * 1024;
+const DEFAULT_CREATE_RATE_LIMIT_PER_MINUTE: u64 = 5;
+const DEFAULT_CREATE_RATE_LIMIT_PER_HOUR: u64 = 30;
+const DEFAULT_READ_RATE_LIMIT_PER_MINUTE: u64 = 60;
 const DEFAULT_TRUSTED_PROXY_IPS: &str = "127.0.0.1,::1";
 const DEFAULT_TURNSTILE_VERIFY_URL: &str =
     "https://challenges.cloudflare.com/turnstile/v0/siteverify";
@@ -33,6 +36,9 @@ pub struct AppConfig {
     pub enable_create: bool,
     pub global_max_active_secrets: u64,
     pub global_max_storage_bytes: u64,
+    pub create_rate_limit_per_minute: u64,
+    pub create_rate_limit_per_hour: u64,
+    pub read_rate_limit_per_minute: u64,
     pub trusted_proxy_ips: Vec<IpAddr>,
     pub turnstile_site_key: String,
     pub turnstile_secret_key: String,
@@ -95,6 +101,21 @@ impl AppConfig {
                 "SECRET_RS_GLOBAL_MAX_STORAGE_BYTES",
                 DEFAULT_GLOBAL_MAX_STORAGE_BYTES.to_string().as_str(),
             )?,
+            create_rate_limit_per_minute: env_or_parse(
+                &get_var,
+                "SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE",
+                DEFAULT_CREATE_RATE_LIMIT_PER_MINUTE.to_string().as_str(),
+            )?,
+            create_rate_limit_per_hour: env_or_parse(
+                &get_var,
+                "SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR",
+                DEFAULT_CREATE_RATE_LIMIT_PER_HOUR.to_string().as_str(),
+            )?,
+            read_rate_limit_per_minute: env_or_parse(
+                &get_var,
+                "SECRET_RS_READ_RATE_LIMIT_PER_MINUTE",
+                DEFAULT_READ_RATE_LIMIT_PER_MINUTE.to_string().as_str(),
+            )?,
             trusted_proxy_ips: env_or_ip_list(
                 &get_var,
                 "SECRET_RS_TRUSTED_PROXY_IPS",
@@ -150,6 +171,18 @@ impl AppConfig {
             bail!("SECRET_RS_GLOBAL_MAX_STORAGE_BYTES must be greater than zero");
         }
 
+        if self.create_rate_limit_per_minute == 0 {
+            bail!("SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE must be greater than zero");
+        }
+
+        if self.create_rate_limit_per_hour == 0 {
+            bail!("SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR must be greater than zero");
+        }
+
+        if self.read_rate_limit_per_minute == 0 {
+            bail!("SECRET_RS_READ_RATE_LIMIT_PER_MINUTE must be greater than zero");
+        }
+
         if self.trusted_proxy_ips.is_empty() {
             bail!("SECRET_RS_TRUSTED_PROXY_IPS must not be empty");
         }
@@ -185,6 +218,9 @@ impl Default for AppConfig {
             enable_create: DEFAULT_ENABLE_CREATE,
             global_max_active_secrets: DEFAULT_GLOBAL_MAX_ACTIVE_SECRETS,
             global_max_storage_bytes: DEFAULT_GLOBAL_MAX_STORAGE_BYTES,
+            create_rate_limit_per_minute: DEFAULT_CREATE_RATE_LIMIT_PER_MINUTE,
+            create_rate_limit_per_hour: DEFAULT_CREATE_RATE_LIMIT_PER_HOUR,
+            read_rate_limit_per_minute: DEFAULT_READ_RATE_LIMIT_PER_MINUTE,
             trusted_proxy_ips: vec![
                 "127.0.0.1"
                     .parse()
@@ -268,9 +304,29 @@ mod tests {
         assert!(config.enable_create);
         assert_eq!(config.global_max_active_secrets, 10_000);
         assert_eq!(config.global_max_storage_bytes, 50 * 1024 * 1024);
+        assert_eq!(config.create_rate_limit_per_minute, 5);
+        assert_eq!(config.create_rate_limit_per_hour, 30);
+        assert_eq!(config.read_rate_limit_per_minute, 60);
         assert_eq!(config.trusted_proxy_ips.len(), 2);
         assert_eq!(config.turnstile_site_key, "site-key");
         assert_eq!(config.turnstile_secret_key, "secret-key");
+    }
+
+    #[test]
+    fn loads_configured_rate_limits() {
+        let config = AppConfig::from_lookup(|key| match key {
+            "SECRET_RS_TURNSTILE_SITE_KEY" => Some("site-key".to_owned()),
+            "SECRET_RS_TURNSTILE_SECRET_KEY" => Some("secret-key".to_owned()),
+            "SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE" => Some("7".to_owned()),
+            "SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR" => Some("42".to_owned()),
+            "SECRET_RS_READ_RATE_LIMIT_PER_MINUTE" => Some("90".to_owned()),
+            _ => None,
+        })
+        .expect("config should load");
+
+        assert_eq!(config.create_rate_limit_per_minute, 7);
+        assert_eq!(config.create_rate_limit_per_hour, 42);
+        assert_eq!(config.read_rate_limit_per_minute, 90);
     }
 
     #[test]
@@ -323,6 +379,48 @@ mod tests {
             error
                 .to_string()
                 .contains("SECRET_RS_GLOBAL_MAX_ACTIVE_SECRETS must be greater than zero")
+        );
+    }
+
+    #[test]
+    fn rejects_zero_create_rate_limit_per_minute() {
+        let mut config = AppConfig::default();
+        config.create_rate_limit_per_minute = 0;
+
+        let error = config.validate().expect_err("config should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE must be greater than zero")
+        );
+    }
+
+    #[test]
+    fn rejects_zero_create_rate_limit_per_hour() {
+        let mut config = AppConfig::default();
+        config.create_rate_limit_per_hour = 0;
+
+        let error = config.validate().expect_err("config should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR must be greater than zero")
+        );
+    }
+
+    #[test]
+    fn rejects_zero_read_rate_limit_per_minute() {
+        let mut config = AppConfig::default();
+        config.read_rate_limit_per_minute = 0;
+
+        let error = config.validate().expect_err("config should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("SECRET_RS_READ_RATE_LIMIT_PER_MINUTE must be greater than zero")
         );
     }
 }
