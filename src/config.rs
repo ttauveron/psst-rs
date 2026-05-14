@@ -15,6 +15,8 @@ const DEFAULT_MAX_CIPHERTEXT_BYTES: u64 = 32 * 1024;
 const DEFAULT_DEFAULT_TTL_SECONDS: u64 = 24 * 60 * 60;
 const DEFAULT_MAX_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_ENABLE_CREATE: bool = true;
+const DEFAULT_GLOBAL_MAX_ACTIVE_SECRETS: u64 = 10_000;
+const DEFAULT_GLOBAL_MAX_STORAGE_BYTES: u64 = 50 * 1024 * 1024;
 const DEFAULT_TRUSTED_PROXY_IPS: &str = "127.0.0.1,::1";
 
 #[derive(Debug, Clone)]
@@ -27,6 +29,8 @@ pub struct AppConfig {
     pub default_ttl_seconds: u64,
     pub max_ttl_seconds: u64,
     pub enable_create: bool,
+    pub global_max_active_secrets: u64,
+    pub global_max_storage_bytes: u64,
     pub trusted_proxy_ips: Vec<IpAddr>,
 }
 
@@ -55,6 +59,14 @@ impl AppConfig {
             enable_create: env_or_parse(
                 "SECRET_RS_ENABLE_CREATE",
                 if DEFAULT_ENABLE_CREATE { "true" } else { "false" },
+            )?,
+            global_max_active_secrets: env_or_parse(
+                "SECRET_RS_GLOBAL_MAX_ACTIVE_SECRETS",
+                DEFAULT_GLOBAL_MAX_ACTIVE_SECRETS.to_string().as_str(),
+            )?,
+            global_max_storage_bytes: env_or_parse(
+                "SECRET_RS_GLOBAL_MAX_STORAGE_BYTES",
+                DEFAULT_GLOBAL_MAX_STORAGE_BYTES.to_string().as_str(),
             )?,
             trusted_proxy_ips: env_or_ip_list(
                 "SECRET_RS_TRUSTED_PROXY_IPS",
@@ -95,6 +107,14 @@ impl AppConfig {
             bail!("SECRET_RS_MAX_TTL_SECONDS must be >= SECRET_RS_DEFAULT_TTL_SECONDS");
         }
 
+        if self.global_max_active_secrets == 0 {
+            bail!("SECRET_RS_GLOBAL_MAX_ACTIVE_SECRETS must be greater than zero");
+        }
+
+        if self.global_max_storage_bytes == 0 {
+            bail!("SECRET_RS_GLOBAL_MAX_STORAGE_BYTES must be greater than zero");
+        }
+
         if self.trusted_proxy_ips.is_empty() {
             bail!("SECRET_RS_TRUSTED_PROXY_IPS must not be empty");
         }
@@ -114,6 +134,8 @@ impl Default for AppConfig {
             default_ttl_seconds: DEFAULT_DEFAULT_TTL_SECONDS,
             max_ttl_seconds: DEFAULT_MAX_TTL_SECONDS,
             enable_create: DEFAULT_ENABLE_CREATE,
+            global_max_active_secrets: DEFAULT_GLOBAL_MAX_ACTIVE_SECRETS,
+            global_max_storage_bytes: DEFAULT_GLOBAL_MAX_STORAGE_BYTES,
             trusted_proxy_ips: vec![
                 "127.0.0.1"
                     .parse()
@@ -177,6 +199,8 @@ mod tests {
         assert_eq!(config.bind_addr.to_string(), "127.0.0.1:3000");
         assert_eq!(config.max_secret_bytes, 16 * 1024);
         assert!(config.enable_create);
+        assert_eq!(config.global_max_active_secrets, 10_000);
+        assert_eq!(config.global_max_storage_bytes, 50 * 1024 * 1024);
         assert_eq!(config.trusted_proxy_ips.len(), 2);
     }
 
@@ -205,6 +229,20 @@ mod tests {
             error
                 .to_string()
                 .contains("SECRET_RS_TRUSTED_PROXY_IPS must not be empty")
+        );
+    }
+
+    #[test]
+    fn rejects_zero_global_secret_quota() {
+        let mut config = AppConfig::default();
+        config.global_max_active_secrets = 0;
+
+        let error = config.validate().expect_err("config should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("SECRET_RS_GLOBAL_MAX_ACTIVE_SECRETS must be greater than zero")
         );
     }
 }

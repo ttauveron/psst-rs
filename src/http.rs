@@ -16,7 +16,7 @@ use tracing::info;
 
 use crate::{
     config::AppConfig,
-    db::{Database, NewSecretRecord, SecretStore},
+    db::{ActiveSecretStats, Database, NewSecretRecord, SecretStore},
     request_context::ClientIp,
     secret::{
         CreateSecretRequest, CreateSecretResponse, DeleteSecretRequest, DeleteSecretResponse,
@@ -156,21 +156,18 @@ async fn create_secret_stub(
     axum::extract::State(state): axum::extract::State<AppState>,
     Json(payload): Json<CreateSecretRequest>,
 ) -> Result<Json<CreateSecretResponse>, ApiError> {
-    if !state.config.enable_create {
-        return Err(ApiError::service_unavailable(
-            "secret creation is temporarily disabled",
-        ));
-    }
+    let now_timestamp = current_timestamp()?;
+    let validated = validate_create_request(&state.config, &payload)?;
 
-    validate_create_request(&state.config, &payload)?;
+    ensure_create_enabled(&state.config)?;
+    enforce_global_create_quotas(&state, now_timestamp, validated.ciphertext_size_bytes)?;
+    check_create_rate_limit_hook(&state)?;
+    verify_turnstile_hook(&payload)?;
 
     let generated = generate_secret_reference();
-    let now_timestamp = current_timestamp()?;
-    let ciphertext_size_bytes = u64::try_from(payload.ciphertext.len())
-        .map_err(|_| ApiError::internal("ciphertext length overflow"))?;
     let expires_at = now_timestamp
         .checked_add(
-            i64::try_from(payload.expires_in_seconds)
+            i64::try_from(validated.expires_in_seconds)
                 .map_err(|_| ApiError::bad_request("expires_in_seconds is too large"))?,
         )
         .ok_or_else(|| ApiError::bad_request("expires_in_seconds is too large"))?;
@@ -182,7 +179,7 @@ async fn create_secret_stub(
         created_at: now_timestamp,
         expires_at,
         delete_token_hash: generated.delete_token_hash,
-        size_bytes: ciphertext_size_bytes,
+        size_bytes: validated.ciphertext_size_bytes,
         requester_ip_hash: None,
     };
 
@@ -310,14 +307,23 @@ fn matched_path_or_uri(request: &Request) -> &str {
         .unwrap_or("unmatched")
 }
 
-fn validate_create_request(config: &AppConfig, payload: &CreateSecretRequest) -> Result<(), ApiError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ValidatedCreateRequest {
+    ciphertext_size_bytes: u64,
+    expires_in_seconds: u64,
+}
+
+fn validate_create_request(
+    config: &AppConfig,
+    payload: &CreateSecretRequest,
+) -> Result<ValidatedCreateRequest, ApiError> {
     if payload.ciphertext.is_empty() {
         return Err(ApiError::bad_request("ciphertext must not be empty"));
     }
 
-    if u64::try_from(payload.ciphertext.len())
-        .map_err(|_| ApiError::bad_request("ciphertext is too large"))?
-        > config.max_ciphertext_bytes
+    let ciphertext_size_bytes = u64::try_from(payload.ciphertext.len())
+        .map_err(|_| ApiError::bad_request("ciphertext is too large"))?;
+    if ciphertext_size_bytes > config.max_ciphertext_bytes
     {
         return Err(ApiError::bad_request("ciphertext exceeds the configured size limit"));
     }
@@ -333,16 +339,71 @@ fn validate_create_request(config: &AppConfig, payload: &CreateSecretRequest) ->
         return Err(ApiError::bad_request("nonce exceeds the configured size limit"));
     }
 
-    if payload.turnstile_token.is_empty() {
-        return Err(ApiError::bad_request("turnstile_token must not be empty"));
-    }
-
     if !is_allowed_ttl(payload.expires_in_seconds) {
         return Err(ApiError::bad_request("expires_in_seconds is not an allowed TTL"));
     }
 
     if payload.expires_in_seconds > config.max_ttl_seconds {
         return Err(ApiError::bad_request("expires_in_seconds exceeds the configured TTL limit"));
+    }
+
+    Ok(ValidatedCreateRequest {
+        ciphertext_size_bytes,
+        expires_in_seconds: payload.expires_in_seconds,
+    })
+}
+
+fn ensure_create_enabled(config: &AppConfig) -> Result<(), ApiError> {
+    if !config.enable_create {
+        return Err(ApiError::service_unavailable(
+            "secret creation is temporarily disabled",
+        ));
+    }
+
+    Ok(())
+}
+
+fn enforce_global_create_quotas(
+    state: &AppState,
+    now_timestamp: i64,
+    new_secret_size_bytes: u64,
+) -> Result<(), ApiError> {
+    let ActiveSecretStats {
+        active_secret_count,
+        active_storage_bytes,
+    } = state
+        .secret_store
+        .active_secret_stats(now_timestamp)
+        .map_err(|error| ApiError::internal(format!("failed to check global quotas: {error}")))?;
+
+    if active_secret_count >= state.config.global_max_active_secrets {
+        return Err(ApiError::service_unavailable(
+            "global active secret quota has been reached",
+        ));
+    }
+
+    let projected_storage_bytes = active_storage_bytes
+        .checked_add(new_secret_size_bytes)
+        .ok_or_else(|| ApiError::internal("global storage quota calculation overflowed"))?;
+
+    if projected_storage_bytes > state.config.global_max_storage_bytes {
+        return Err(ApiError::service_unavailable(
+            "global storage quota has been reached",
+        ));
+    }
+
+    Ok(())
+}
+
+// Step 7 hook: rate limiting will be wired here without reshaping the handler.
+fn check_create_rate_limit_hook(_state: &AppState) -> Result<(), ApiError> {
+    Ok(())
+}
+
+// Step 7 hook: Turnstile verification will be wired here without reshaping the handler.
+fn verify_turnstile_hook(payload: &CreateSecretRequest) -> Result<(), ApiError> {
+    if payload.turnstile_token.is_empty() {
+        return Err(ApiError::bad_request("turnstile_token must not be empty"));
     }
 
     Ok(())
@@ -525,6 +586,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_route_rejects_ciphertext_above_configured_limit() {
+        let mut config = AppConfig::default();
+        config.max_ciphertext_bytes = 10;
+        let (_guard, app, _database) = test_router("ciphertext-limit", config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/create")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":900,"turnstile_token":"dummy-token"}"#,
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_route_rejects_ttl_above_configured_limit() {
+        let mut config = AppConfig::default();
+        config.default_ttl_seconds = 3600;
+        config.max_ttl_seconds = 3600;
+        let (_guard, app, _database) = test_router("ttl-limit", config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/create")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"dummy-token"}"#,
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn create_route_returns_503_when_creation_is_disabled() {
         let mut config = AppConfig::default();
         config.enable_create = false;
@@ -538,6 +646,58 @@ mod tests {
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"dummy-token"}"#,
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn create_route_rejects_when_global_active_secret_quota_is_reached() {
+        let mut config = AppConfig::default();
+        config.global_max_active_secrets = 1;
+        let (_guard, app, database) = test_router("active-secret-quota", config);
+        let _existing = insert_test_secret(
+            &database,
+            "ciphertext-existing",
+            "nonce-existing",
+            current_timestamp().expect("current timestamp should exist") + 3600,
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/create")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":900,"turnstile_token":"dummy-token"}"#,
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn create_route_rejects_when_global_storage_quota_is_reached() {
+        let mut config = AppConfig::default();
+        config.global_max_storage_bytes = 10;
+        let (_guard, app, _database) = test_router("storage-quota", config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/create")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":900,"turnstile_token":"dummy-token"}"#,
                     ))
                     .expect("request should build"),
             )

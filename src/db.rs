@@ -151,6 +151,12 @@ pub struct SecretStore {
     database: Database,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveSecretStats {
+    pub active_secret_count: u64,
+    pub active_storage_bytes: u64,
+}
+
 #[allow(dead_code)]
 impl SecretStore {
     pub fn new(database: Database) -> Self {
@@ -237,6 +243,42 @@ impl SecretStore {
                 [now_timestamp],
             )
             .context("failed to purge expired secrets")
+    }
+
+    pub fn active_secret_stats(&self, now_timestamp: i64) -> Result<ActiveSecretStats> {
+        let connection = self.database.open_connection()?;
+        connection
+            .query_row(
+                "SELECT
+                    COUNT(*),
+                    COALESCE(SUM(size_bytes), 0)
+                 FROM secrets
+                 WHERE expires_at > ?1
+                   AND consumed_at IS NULL",
+                [now_timestamp],
+                |row| {
+                    let active_secret_count: i64 = row.get(0)?;
+                    let active_storage_bytes: i64 = row.get(1)?;
+
+                    Ok(ActiveSecretStats {
+                        active_secret_count: u64::try_from(active_secret_count).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                0,
+                                rusqlite::types::Type::Integer,
+                                Box::new(error),
+                            )
+                        })?,
+                        active_storage_bytes: u64::try_from(active_storage_bytes).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                1,
+                                rusqlite::types::Type::Integer,
+                                Box::new(error),
+                            )
+                        })?,
+                    })
+                },
+            )
+            .context("failed to load active secret stats")
     }
 
     // v1 strategy: consume a secret by deleting it immediately in the same
@@ -338,7 +380,7 @@ mod tests {
     use rusqlite::Connection;
     use rusqlite::params;
 
-    use super::{Database, NewSecretRecord, SecretStore};
+    use super::{ActiveSecretStats, Database, NewSecretRecord, SecretStore};
     use crate::config::AppConfig;
 
     #[test]
@@ -559,6 +601,35 @@ mod tests {
                 .get_secret_by_id(&active_secret.id)
                 .expect("active secret lookup should succeed")
                 .is_some()
+        );
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
+    fn active_secret_stats_ignore_expired_secrets() {
+        let (temp_root, store) = setup_secret_store("secret-store-stats");
+        let now_timestamp = 1_700_000_000;
+        let active_secret = sample_secret("secret-stats-active", now_timestamp, now_timestamp + 600);
+        let expired_secret = sample_secret("secret-stats-expired", now_timestamp, now_timestamp - 1);
+
+        store
+            .insert_secret(&active_secret)
+            .expect("active secret insertion should succeed");
+        store
+            .insert_secret(&expired_secret)
+            .expect("expired secret insertion should succeed");
+
+        let stats = store
+            .active_secret_stats(now_timestamp)
+            .expect("active secret stats should load");
+
+        assert_eq!(
+            stats,
+            ActiveSecretStats {
+                active_secret_count: 1,
+                active_storage_bytes: active_secret.size_bytes,
+            }
         );
 
         cleanup_temp_dir(&temp_root);
