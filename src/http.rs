@@ -733,6 +733,7 @@ mod tests {
         assert!(html.contains(r#"data-secret-id="test-secret-id""#));
         assert!(html.contains("Click to decrypt the secret"));
         assert!(html.contains(r#"id="decrypt-secret-button""#));
+        assert!(html.contains(r#"id="copy-secret-button""#));
         assert!(html.contains(r#"src="/static/app.js?v="#));
         assert!(
             html.contains(

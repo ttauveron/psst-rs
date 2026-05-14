@@ -22,7 +22,9 @@
         <p class="status" id="read-status" role="status" aria-live="polite">Click to decrypt the secret. A successful read will remove it from the server.</p>
         <div class="actions">
           <button id="decrypt-secret-button" type="button">Decrypt secret</button>
+          <button id="copy-secret-button" type="button" class="button-secondary" hidden>Copy secret</button>
         </div>
+        <p class="status" id="read-copy-status" role="status" aria-live="polite"></p>
         <pre id="secret-output" hidden></pre>
       </section>
 
