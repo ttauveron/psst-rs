@@ -222,9 +222,14 @@ async fn create_secret_stub(
 
 async fn read_secret(
     axum::extract::State(state): axum::extract::State<AppState>,
+    client_ip: Option<Extension<ClientIp>>,
     Path(secret_id): Path<String>,
 ) -> Result<Json<ReadSecretResponse>, ApiError> {
     let now_timestamp = current_timestamp()?;
+    let requester_ip_hash = client_ip
+        .map(|Extension(client_ip)| client_ip.hashed_identifier(&state.config.ip_hash_salt));
+    check_read_rate_limit(&state, requester_ip_hash.as_deref(), now_timestamp)?;
+
     let secret = state
         .secret_store
         .consume_unexpired_secret_by_id(&secret_id, now_timestamp)
@@ -565,6 +570,31 @@ fn check_create_rate_limit_hook(
     if hour_count > state.config.create_rate_limit_per_hour {
         return Err(ApiError::too_many_requests(
             "create rate limit exceeded for the current hour",
+        ));
+    }
+
+    Ok(())
+}
+
+fn check_read_rate_limit(
+    state: &AppState,
+    requester_ip_hash: Option<&str>,
+    now_timestamp: i64,
+) -> Result<(), ApiError> {
+    let Some(requester_ip_hash) = requester_ip_hash else {
+        return Ok(());
+    };
+
+    let minute_bucket = now_timestamp.div_euclid(60);
+    let minute_key = format!("read-minute:{requester_ip_hash}");
+    let minute_count = state
+        .secret_store
+        .increment_rate_limit_counter(&minute_key, minute_bucket)
+        .map_err(|error| ApiError::internal(format!("failed to update read rate limit: {error}")))?;
+
+    if minute_count > state.config.read_rate_limit_per_minute {
+        return Err(ApiError::too_many_requests(
+            "read rate limit exceeded for the current minute",
         ));
     }
 
@@ -1262,6 +1292,41 @@ mod tests {
 
         assert_eq!(first_response.status(), StatusCode::OK);
         assert_eq!(second_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn read_route_rejects_when_minute_rate_limit_is_exceeded() {
+        let mut config = AppConfig::default();
+        config.read_rate_limit_per_minute = 1;
+        let (_guard, app, database) = test_router("read-minute-rate-limit", config);
+        let now_timestamp = current_timestamp().expect("current timestamp should exist");
+        let first_secret =
+            insert_test_secret(&database, "ciphertext-one", "nonce-one", now_timestamp + 60);
+        let second_secret =
+            insert_test_secret(&database, "ciphertext-two", "nonce-two", now_timestamp + 60);
+
+        let request_for = |secret_id: &str| {
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/api/secrets/{secret_id}"))
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 12345))))
+                .header("cf-connecting-ip", "203.0.113.10")
+                .body(Body::empty())
+                .expect("request should build")
+        };
+
+        let first_response = app
+            .clone()
+            .oneshot(request_for(&first_secret.secret_id))
+            .await
+            .expect("first read should respond");
+        let second_response = app
+            .oneshot(request_for(&second_secret.secret_id))
+            .await
+            .expect("second read should respond");
+
+        assert_eq!(first_response.status(), StatusCode::OK);
+        assert_eq!(second_response.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]
