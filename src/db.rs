@@ -372,6 +372,8 @@ fn map_secret_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SecretRecord> {
 #[cfg(test)]
 mod tests {
     use std::{
+        sync::{Arc, Barrier},
+        thread,
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -681,6 +683,59 @@ mod tests {
 
         assert!(first.is_some());
         assert!(second.is_none());
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
+    fn secret_store_allows_exactly_one_concurrent_consumer() {
+        let (temp_root, store) = setup_secret_store("secret-store-concurrent-consume");
+        let new_secret = sample_secret("secret-concurrent-consume", 1_700_000_000, 1_700_086_400);
+
+        store
+            .insert_secret(&new_secret)
+            .expect("secret insertion should succeed");
+
+        let barrier = Arc::new(Barrier::new(3));
+        let first_store = store.clone();
+        let second_store = store.clone();
+        let first_barrier = barrier.clone();
+        let second_barrier = barrier.clone();
+        let secret_id = new_secret.id.clone();
+
+        let first_thread = thread::spawn(move || {
+            first_barrier.wait();
+            first_store
+                .consume_unexpired_secret_by_id(&secret_id, 1_700_000_100)
+                .expect("first concurrent consume should succeed")
+                .is_some()
+        });
+
+        let second_secret_id = new_secret.id.clone();
+        let second_thread = thread::spawn(move || {
+            second_barrier.wait();
+            second_store
+                .consume_unexpired_secret_by_id(&second_secret_id, 1_700_000_100)
+                .expect("second concurrent consume should succeed")
+                .is_some()
+        });
+
+        barrier.wait();
+
+        let first_succeeded = first_thread
+            .join()
+            .expect("first concurrent consumer should not panic");
+        let second_succeeded = second_thread
+            .join()
+            .expect("second concurrent consumer should not panic");
+
+        assert_ne!(first_succeeded, second_succeeded);
+        assert!(
+            store
+                .get_secret_by_id(&new_secret.id)
+                .expect("post-concurrency lookup should succeed")
+                .is_none()
+        );
 
         cleanup_temp_dir(&temp_root);
     }
