@@ -299,16 +299,17 @@ Bloquer les abus évidents avant ouverture publique.
 
 **Travail**
 
-* Ajouter une purge au démarrage.
 * Ajouter un job périodique interne.
 * Supprimer secrets expirés, secrets consommés et vieux buckets de rate limit.
 * Mesurer les compteurs globaux à partir de la base.
+* Garantir qu’un redémarrage ou une maintenance courte ne supprime pas les secrets encore valides.
 
 **Terminé quand**
 
 * Les secrets expirés deviennent inaccessibles puis sont purgés.
 * Les données temporaires ne grossissent pas indéfiniment.
 * Le service reste stable dans le temps sans intervention manuelle.
+* Un secret non expiré reste lisible après redémarrage du service.
 
 ### Étape 9 — Renforcer les tests et les garanties de sécurité
 
