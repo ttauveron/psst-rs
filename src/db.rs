@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
 use crate::config::AppConfig;
@@ -231,6 +231,53 @@ impl SecretStore {
                 [now_timestamp],
             )
             .context("failed to purge expired secrets")
+    }
+
+    // v1 strategy: consume a secret by deleting it immediately in the same
+    // transaction that reads it, rather than marking `consumed_at` first.
+    pub fn consume_unexpired_secret_by_id(
+        &self,
+        secret_id: &str,
+        now_timestamp: i64,
+    ) -> Result<Option<SecretRecord>> {
+        self.with_immediate_transaction(|connection| {
+            let secret = connection
+                .query_row(
+                    "SELECT
+                        id,
+                        ciphertext,
+                        nonce,
+                        created_at,
+                        expires_at,
+                        consumed_at,
+                        delete_token_hash,
+                        size_bytes,
+                        requester_ip_hash
+                     FROM secrets
+                     WHERE id = ?1
+                       AND expires_at > ?2
+                       AND consumed_at IS NULL",
+                    params![secret_id, now_timestamp],
+                    map_secret_row,
+                )
+                .optional()
+                .context("failed to load secret for consumption")?;
+
+            let Some(secret) = secret else {
+                return Ok(None);
+            };
+
+            let deleted_rows = connection
+                .execute("DELETE FROM secrets WHERE id = ?1", [secret_id])
+                .context("failed to delete consumed secret")?;
+
+            ensure!(
+                deleted_rows == 1,
+                "expected to delete exactly one secret during consumption"
+            );
+
+            Ok(Some(secret))
+        })
     }
 
     pub fn with_immediate_transaction<T, F>(&self, operation: F) -> Result<T>
@@ -487,6 +534,80 @@ mod tests {
             store
                 .get_secret_by_id(&active_secret.id)
                 .expect("active secret lookup should succeed")
+                .is_some()
+        );
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
+    fn secret_store_consumes_secret_atomically_by_deleting_it() {
+        let (temp_root, store) = setup_secret_store("secret-store-consume");
+        let new_secret = sample_secret("secret-consume", 1_700_000_000, 1_700_086_400);
+
+        store
+            .insert_secret(&new_secret)
+            .expect("secret insertion should succeed");
+
+        let consumed = store
+            .consume_unexpired_secret_by_id(&new_secret.id, 1_700_000_100)
+            .expect("secret consumption should succeed")
+            .expect("secret should be consumed");
+
+        assert_eq!(consumed.id, new_secret.id);
+        assert_eq!(consumed.ciphertext, new_secret.ciphertext);
+        assert_eq!(consumed.nonce, new_secret.nonce);
+        assert_eq!(consumed.delete_token_hash, new_secret.delete_token_hash);
+        assert!(
+            store
+                .get_secret_by_id(&new_secret.id)
+                .expect("secret lookup should succeed")
+                .is_none()
+        );
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
+    fn secret_store_returns_none_when_consuming_same_secret_twice() {
+        let (temp_root, store) = setup_secret_store("secret-store-consume-twice");
+        let new_secret = sample_secret("secret-consume-twice", 1_700_000_000, 1_700_086_400);
+
+        store
+            .insert_secret(&new_secret)
+            .expect("secret insertion should succeed");
+
+        let first = store
+            .consume_unexpired_secret_by_id(&new_secret.id, 1_700_000_100)
+            .expect("first consume should succeed");
+        let second = store
+            .consume_unexpired_secret_by_id(&new_secret.id, 1_700_000_101)
+            .expect("second consume should succeed");
+
+        assert!(first.is_some());
+        assert!(second.is_none());
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
+    fn secret_store_does_not_consume_expired_secret() {
+        let (temp_root, store) = setup_secret_store("secret-store-expired-consume");
+        let expired_secret = sample_secret("secret-expired-consume", 1_700_000_000, 200);
+
+        store
+            .insert_secret(&expired_secret)
+            .expect("secret insertion should succeed");
+
+        let consumed = store
+            .consume_unexpired_secret_by_id(&expired_secret.id, 500)
+            .expect("consume should succeed");
+
+        assert!(consumed.is_none());
+        assert!(
+            store
+                .get_secret_by_id(&expired_secret.id)
+                .expect("secret lookup should succeed")
                 .is_some()
         );
 

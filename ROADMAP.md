@@ -116,6 +116,7 @@ Disposer d’une couche de persistence simple et robuste.
 
 * Définir la transaction SQLite qui permettra “lire et consommer”.
 * Décider si la v1 supprime immédiatement la ligne ou marque `consumed_at` avant purge.
+* Décision retenue pour la v1 : suppression immédiate de la ligne après lecture réussie.
 * Documenter cette décision dans le code et dans la roadmap si besoin.
 * Vérifier que le design couvre le cas de deux lectures concurrentes.
 
