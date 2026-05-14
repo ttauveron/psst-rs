@@ -72,13 +72,64 @@ Créer une base de travail propre pour le backend, le frontend statique et la co
 
 Disposer d’une couche de persistence simple et robuste.
 
-**Travail**
+**Sous-tâches**
 
-* Créer le schéma SQLite au démarrage.
-* Implémenter les tables `secrets`, `abuse_reports`, `rate_limits`.
-* Ajouter les index nécessaires.
-* Encapsuler l’accès DB dans une couche dédiée.
-* Prévoir les primitives atomiques nécessaires à la lecture unique.
+#### 3.1 — Ajouter la couche d’accès SQLite
+
+* Ajouter un module dédié à la base de données.
+* Ouvrir la connexion SQLite à partir de `SECRET_RS_DATABASE_PATH`.
+* Centraliser les options de connexion utiles pour la suite.
+* Préparer une API interne simple pour exécuter l’initialisation et les requêtes.
+
+**Terminé quand**
+
+* L’application peut ouvrir une base SQLite locale de manière fiable.
+* La logique SQLite n’est pas dispersée dans les handlers HTTP.
+
+#### 3.2 — Initialiser le schéma au démarrage
+
+* Créer le schéma au boot si la base est vide.
+* Ajouter les tables `secrets`, `abuse_reports`, `rate_limits`.
+* Ajouter les index nécessaires à l’expiration et à la consommation.
+* Faire de l’initialisation une opération idempotente.
+
+**Terminé quand**
+
+* Un démarrage sur base vide crée le schéma complet.
+* Redémarrer l’application ne casse rien et ne duplique rien.
+
+#### 3.3 — Modéliser les accès DB principaux
+
+* Définir les structures Rust correspondant aux enregistrements utiles.
+* Poser une couche repository ou store pour les opérations sur `secrets`.
+* Prévoir dès maintenant une primitive d’insertion d’un secret.
+* Prévoir dès maintenant une primitive de lecture atomique.
+* Prévoir dès maintenant une primitive de suppression par token.
+* Prévoir dès maintenant une primitive utile à la purge future.
+
+**Terminé quand**
+
+* Les futures routes métier peuvent s’appuyer sur une API DB claire.
+* Les opérations SQL critiques ont une place dédiée dans le code.
+
+#### 3.4 — Préparer la lecture unique atomique
+
+* Définir la transaction SQLite qui permettra “lire et consommer”.
+* Décider si la v1 supprime immédiatement la ligne ou marque `consumed_at` avant purge.
+* Documenter cette décision dans le code et dans la roadmap si besoin.
+* Vérifier que le design couvre le cas de deux lectures concurrentes.
+
+**Terminé quand**
+
+* La stratégie atomique de lecture unique est arrêtée.
+* L’étape 4 peut implémenter `GET /api/secrets/:id` sans refonte du schéma.
+
+#### 3.5 — Ajouter les tests de fondation DB
+
+* Tester l’initialisation automatique du schéma.
+* Tester l’idempotence de l’initialisation.
+* Tester l’ouverture d’une base temporaire en environnement de test.
+* Si possible, tester déjà les primitives transactionnelles de base.
 
 **Terminé quand**
 
@@ -92,14 +143,81 @@ Disposer d’une couche de persistence simple et robuste.
 
 Faire fonctionner le cycle de vie minimal d’un secret côté serveur.
 
-**Travail**
+**Sous-tâches**
 
-* Générer des IDs aléatoires robustes.
-* Générer un `delete_token` et stocker uniquement son hash.
-* Implémenter `POST /api/create`.
-* Implémenter `GET /api/secrets/:id` avec consommation atomique.
-* Implémenter `POST /api/delete/:id`.
-* Valider TTL, tailles max et quotas simples.
+#### 4.1 — Ajouter les types métier et la génération des identifiants
+
+* Définir les structures de requête/réponse pour `create`, `read` et `delete`.
+* Générer des `secret_id` aléatoires avec au moins 128 bits d’entropie.
+* Générer un `delete_token` aléatoire.
+* Ajouter le hash du `delete_token` côté serveur.
+* Isoler ces responsabilités dans un module testable.
+
+**Terminé quand**
+
+* L’application sait produire un ID de secret et un delete token robustes.
+* Le serveur ne stocke jamais le delete token en clair.
+
+#### 4.2 — Implémenter `POST /api/create`
+
+* Valider `Content-Type`, taille de body et forme JSON.
+* Valider `ciphertext`, `nonce` et `expires_in_seconds`.
+* Refuser les TTL non autorisés ou hors borne.
+* Refuser les payloads trop gros.
+* Insérer le secret chiffré en base.
+* Retourner `id` et `delete_token`.
+
+**Terminé quand**
+
+* Un secret chiffré peut être créé en base avec ses métadonnées.
+* Les entrées invalides sont refusées proprement sans fuite d’information.
+
+#### 4.3 — Implémenter `GET /api/secrets/:id`
+
+* Charger le secret par ID.
+* Vérifier son expiration.
+* Consommer le secret dans une transaction atomique.
+* Retourner uniquement `ciphertext` et `nonce` en cas de succès.
+* Retourner `404` en cas d’inexistant, expiré ou déjà lu.
+
+**Terminé quand**
+
+* Une seule lecture concurrente peut réussir.
+* Une seconde lecture du même secret échoue systématiquement.
+
+#### 4.4 — Implémenter `POST /api/delete/:id`
+
+* Valider le body JSON.
+* Comparer le token reçu avec le hash stocké.
+* Supprimer le secret avant lecture si le token est valide.
+* Retourner une réponse minimale et stable.
+
+**Terminé quand**
+
+* Un lien peut être invalidé avant consultation.
+* Un token invalide est refusé sans exposer d’information sensible.
+
+#### 4.5 — Brancher les validations métier v1
+
+* Appliquer les limites de taille utiles à la création.
+* Appliquer les bornes TTL configurées.
+* Préparer le point d’entrée futur du rate limiting.
+* Préparer le point d’entrée futur de Turnstile.
+* Préparer le point d’entrée futur des quotas globaux.
+
+**Terminé quand**
+
+* Les garde-fous métier essentiels sont en place avant l’anti-abus avancé.
+* L’étape 7 pourra se brancher sans réécrire les handlers.
+
+#### 4.6 — Ajouter les tests métier backend
+
+* Tester la création valide.
+* Tester le refus d’un payload trop gros.
+* Tester le refus d’un TTL invalide.
+* Tester la lecture unique atomique.
+* Tester la suppression par delete token valide.
+* Tester le refus d’un delete token invalide.
 
 **Terminé quand**
 
