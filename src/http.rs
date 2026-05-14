@@ -271,15 +271,15 @@ fn render_index_page(config: &AppConfig) -> String {
     <main class="layout" id="create-app" data-public-base-url="{public_base_url}" data-max-secret-bytes="{max_secret_bytes}" data-enable-create="{enable_create}">
       <header class="hero">
         <p class="eyebrow">secret-rs</p>
-        <h1>Partager un secret sans envoyer la cle au serveur.</h1>
-        <p class="lede">Le secret est chiffre dans le navigateur, lu une seule fois, puis supprime. La recuperation est impossible apres lecture ou expiration.</p>
+        <h1>Share a secret without sending the key to the server.</h1>
+        <p class="lede">The secret is encrypted in the browser, read once, then deleted. Recovery is impossible after read or expiration.</p>
       </header>
 
       <section class="panel">
         <form id="create-form" novalidate>
           <label class="field">
             <span>Secret</span>
-            <textarea id="secret-input" name="secret" rows="10" placeholder="Collez le mot de passe, la phrase de recuperation ou la note confidentielle."></textarea>
+            <textarea id="secret-input" name="secret" rows="10" placeholder="Paste the password, recovery phrase, or confidential note."></textarea>
           </label>
 
           <div class="row">
@@ -288,39 +288,39 @@ fn render_index_page(config: &AppConfig) -> String {
               <select id="ttl-select" name="expires_in_seconds">{ttl_options}</select>
             </label>
             <div class="field compact">
-              <span>Taille</span>
-              <p class="metric"><strong id="secret-size">0</strong> / {max_secret_bytes} octets UTF-8</p>
+              <span>Size</span>
+              <p class="metric"><strong id="secret-size">0</strong> / {max_secret_bytes} UTF-8 bytes</p>
             </div>
           </div>
 
           <div class="actions">
-            <button id="create-button" type="submit">Chiffrer et creer le lien</button>
+            <button id="create-button" type="submit">Encrypt and create link</button>
           </div>
         </form>
 
-        <p class="hint">Limite : {max_secret_bytes} octets UTF-8 avant chiffrement. La cle reste dans le fragment <code>#...</code>.</p>
-        <p class="hint">Le destinataire ne pourra lire le secret qu'une seule fois. Si le lien est perdu, rien ne peut etre recupere cote serveur.</p>
+        <p class="hint">Limit: {max_secret_bytes} UTF-8 bytes before encryption. The key stays in the <code>#...</code> fragment.</p>
+        <p class="hint">The recipient can read the secret only once. If the link is lost, nothing can be recovered server-side.</p>
         <p class="status" id="create-status" role="status" aria-live="polite"></p>
       </section>
 
       <section class="panel" id="create-result" hidden>
-        <h2>Lien de partage</h2>
-        <p>Le destinataire doit recevoir le lien complet, fragment inclus.</p>
+        <h2>Share link</h2>
+        <p>The recipient must receive the full link, including the fragment.</p>
         <label class="field">
-          <span>Lien</span>
+          <span>Link</span>
           <input id="share-link" type="text" readonly>
         </label>
         <div class="actions">
-          <button id="copy-link-button" type="button">Copier</button>
-          <button id="delete-secret-button" type="button" class="button-secondary">Supprimer maintenant</button>
+          <button id="copy-link-button" type="button">Copy</button>
+          <button id="delete-secret-button" type="button" class="button-secondary">Delete now</button>
         </div>
-        <p class="hint">La suppression anticipee detruit le secret avant sa premiere lecture.</p>
+        <p class="hint">Early deletion destroys the secret before its first read.</p>
         <p class="status" id="copy-status" role="status" aria-live="polite"></p>
         <p class="status" id="delete-status" role="status" aria-live="polite"></p>
       </section>
 
       <footer class="footer">
-        <a href="/about">A propos</a>
+        <a href="/about">About</a>
       </footer>
     </main>
   </body>
@@ -336,24 +336,24 @@ fn render_about_page() -> String {
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>A propos</title>
+    <title>About</title>
     <link rel="stylesheet" href="/static/app.css">
   </head>
   <body>
     <main class="layout prose">
       <header class="hero">
-        <p class="eyebrow">A propos</p>
-        <h1>Le serveur ne voit jamais la cle.</h1>
+        <p class="eyebrow">About</p>
+        <h1>The server never sees the key.</h1>
       </header>
 
       <section class="panel">
-        <p>Le navigateur genere une cle AES-GCM, chiffre le secret localement puis n'envoie au serveur que le ciphertext et le nonce.</p>
-        <p>Le lien final contient la cle uniquement dans le fragment d'URL, apres <code>#</code>. Le fragment n'est pas transmis au serveur lors des requetes HTTP.</p>
-        <p>Quand le secret est lu avec succes, le serveur le supprime immediatement. Il n'existe pas de mecanisme de recuperation apres lecture, expiration ou suppression anticipee.</p>
+        <p>The browser generates an AES-GCM key, encrypts the secret locally, then sends only the ciphertext and nonce to the server.</p>
+        <p>The final link contains the key only in the URL fragment after <code>#</code>. The fragment is not sent to the server in HTTP requests.</p>
+        <p>When a secret is read successfully, the server deletes it immediately. There is no recovery mechanism after read, expiration, or early deletion.</p>
       </section>
 
       <footer class="footer">
-        <a href="/">Retour</a>
+        <a href="/">Back</a>
       </footer>
     </main>
   </body>
@@ -368,28 +368,28 @@ fn render_read_page(secret_id: &str) -> String {
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Lire le secret</title>
+    <title>Read secret</title>
     <link rel="stylesheet" href="/static/app.css">
     <script src="/static/app.js" defer></script>
   </head>
   <body>
     <main class="layout" id="read-app" data-secret-id="{}">
       <header class="hero">
-        <p class="eyebrow">Lecture unique</p>
-        <h1>Dechiffrement local du secret.</h1>
-        <p class="lede">Le secret est recupere une fois, dechiffre dans le navigateur, puis retire du stockage. Si la cle du fragment manque ou est incorrecte, le serveur ne peut pas aider.</p>
+        <p class="eyebrow">Single read</p>
+        <h1>Decrypt the secret locally.</h1>
+        <p class="lede">The secret is retrieved once, decrypted in the browser, then removed from storage. If the fragment key is missing or wrong, the server cannot help.</p>
       </header>
 
       <section class="panel">
-        <p class="status" id="read-status" role="status" aria-live="polite">Cliquez pour dechiffrer le secret. La lecture reussie le supprimera du serveur.</p>
+        <p class="status" id="read-status" role="status" aria-live="polite">Click to decrypt the secret. A successful read will remove it from the server.</p>
         <div class="actions">
-          <button id="decrypt-secret-button" type="button">Dechiffrer le secret</button>
+          <button id="decrypt-secret-button" type="button">Decrypt secret</button>
         </div>
         <pre id="secret-output" hidden></pre>
       </section>
 
       <footer class="footer">
-        <a href="/">Creer un autre lien</a>
+        <a href="/">Create another link</a>
       </footer>
     </main>
   </body>
@@ -401,10 +401,10 @@ fn render_read_page(secret_id: &str) -> String {
 fn ttl_label(ttl_seconds: u64) -> &'static str {
     match ttl_seconds {
         ttl if ttl == 15 * 60 => "15 minutes",
-        ttl if ttl == 60 * 60 => "1 heure",
-        ttl if ttl == 24 * 60 * 60 => "24 heures",
-        ttl if ttl == 7 * 24 * 60 * 60 => "7 jours",
-        _ => "TTL non supporte",
+        ttl if ttl == 60 * 60 => "1 hour",
+        ttl if ttl == 24 * 60 * 60 => "24 hours",
+        ttl if ttl == 7 * 24 * 60 * 60 => "7 days",
+        _ => "Unsupported TTL",
     }
 }
 
@@ -681,10 +681,10 @@ mod tests {
         assert!(html.contains(r#"data-max-secret-bytes="16384""#));
         assert!(html.contains(r#"src="/static/app.js""#));
         assert!(html.contains(r#"href="/static/app.css""#));
-        assert!(html.contains("Chiffrer et creer le lien"));
-        assert!(html.contains("Supprimer maintenant"));
-        assert!(html.contains("La recuperation est impossible apres lecture ou expiration"));
-        assert!(html.contains("Le destinataire ne pourra lire le secret qu'une seule fois"));
+        assert!(html.contains("Encrypt and create link"));
+        assert!(html.contains("Delete now"));
+        assert!(html.contains("Recovery is impossible after read or expiration"));
+        assert!(html.contains("The recipient can read the secret only once"));
     }
 
     #[tokio::test]
@@ -710,10 +710,10 @@ mod tests {
 
         assert!(html.contains(r#"id="read-app""#));
         assert!(html.contains(r#"data-secret-id="test-secret-id""#));
-        assert!(html.contains("Cliquez pour dechiffrer le secret"));
+        assert!(html.contains("Click to decrypt the secret"));
         assert!(html.contains(r#"id="decrypt-secret-button""#));
         assert!(html.contains(r#"src="/static/app.js""#));
-        assert!(html.contains("Si la cle du fragment manque ou est incorrecte"));
+        assert!(html.contains("If the fragment key is missing or wrong"));
     }
 
     #[tokio::test]
@@ -737,9 +737,9 @@ mod tests {
             .expect("body should be readable");
         let html = String::from_utf8(body.to_vec()).expect("body should be utf-8");
 
-        assert!(html.contains("Le serveur ne voit jamais la cle"));
-        assert!(html.contains("Le fragment n'est pas transmis au serveur"));
-        assert!(html.contains("Il n'existe pas de mecanisme de recuperation"));
+        assert!(html.contains("The server never sees the key"));
+        assert!(html.contains("The fragment is not sent to the server"));
+        assert!(html.contains("There is no recovery mechanism"));
     }
 
     #[tokio::test]

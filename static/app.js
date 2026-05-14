@@ -9,7 +9,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (createRoot) {
     bootCreatePage(createRoot).catch((error) => {
       console.error(error)
-      setText("create-status", "Erreur interne pendant le chiffrement local.")
+      setText("create-status", "Internal error while encrypting locally.")
     })
   }
 
@@ -17,7 +17,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (readRoot) {
     bootReadPage(readRoot).catch((error) => {
       console.error(error)
-      setText("read-status", "Impossible de dechiffrer ce secret.")
+      setText("read-status", "Unable to decrypt this secret.")
     })
   }
 })
@@ -43,7 +43,7 @@ async function bootCreatePage(root) {
     createButton.disabled = true
     ttlSelect.disabled = true
     input.disabled = true
-    setText("create-status", "La creation est temporairement desactivee.")
+    setText("create-status", "Secret creation is temporarily disabled.")
     return
   }
 
@@ -57,20 +57,20 @@ async function bootCreatePage(root) {
     const plaintextBytes = textEncoder.encode(plaintext)
 
     if (plaintextBytes.length === 0) {
-      setText("create-status", "Le secret ne doit pas etre vide.")
+      setText("create-status", "The secret must not be empty.")
       return
     }
 
     if (plaintextBytes.length > maxSecretBytes) {
       setText(
         "create-status",
-        `Le secret depasse la limite de ${maxSecretBytes} octets UTF-8.`,
+        `The secret exceeds the ${maxSecretBytes} UTF-8 byte limit.`,
       )
       return
     }
 
     createButton.disabled = true
-    createButton.textContent = "Chiffrement..."
+    createButton.textContent = "Encrypting..."
 
     try {
       const key = await crypto.subtle.generateKey(
@@ -99,7 +99,7 @@ async function bootCreatePage(root) {
 
       const payload = await readJson(response)
       if (!response.ok) {
-        throw new Error(payload.error || "La creation du secret a echoue.")
+        throw new Error(payload.error || "Secret creation failed.")
       }
 
       const shareUrl = buildShareUrl(
@@ -116,14 +116,14 @@ async function bootCreatePage(root) {
       result.hidden = false
       setText(
         "create-status",
-        "Lien genere. Le serveur ne connait pas la cle, et le secret ne pourra etre lu qu'une fois.",
+        "Link generated. The server does not know the key, and the secret can be read only once.",
       )
     } catch (error) {
       latestSecretReference = null
       setText("create-status", mapCreateErrorMessage(error))
     } finally {
       createButton.disabled = false
-      createButton.textContent = "Chiffrer et creer le lien"
+      createButton.textContent = "Encrypt and create link"
     }
   })
 
@@ -134,16 +134,16 @@ async function bootCreatePage(root) {
 
     try {
       await navigator.clipboard.writeText(shareLink.value)
-      setText("copy-status", "Lien copie.")
+      setText("copy-status", "Link copied.")
     } catch (_error) {
       shareLink.select()
-      setText("copy-status", "Copie automatique indisponible, copiez le lien manuellement.")
+      setText("copy-status", "Automatic copy is unavailable, please copy the link manually.")
     }
   })
 
   deleteButton.addEventListener("click", async () => {
     if (!latestSecretReference) {
-      setText("delete-status", "Aucun secret actif a supprimer.")
+      setText("delete-status", "No active secret is available to delete.")
       return
     }
 
@@ -163,14 +163,14 @@ async function bootCreatePage(root) {
 
       const payload = await readJson(response)
       if (!response.ok) {
-        throw new Error(payload.error || "La suppression anticipee a echoue.")
+        throw new Error(payload.error || "Early deletion failed.")
       }
 
       latestSecretReference = null
       shareLink.value = ""
       result.hidden = true
-      setText("delete-status", "Secret supprime avant lecture.")
-      setText("create-status", "Le secret a ete detruit. Il faut creer un nouveau lien si necessaire.")
+      setText("delete-status", "Secret deleted before first read.")
+      setText("create-status", "The secret has been destroyed. Create a new link if needed.")
     } catch (error) {
       setText("delete-status", mapDeleteErrorMessage(error))
     } finally {
@@ -192,12 +192,12 @@ async function bootReadPage(root) {
     setText("read-status", "")
 
     if (!rawKey) {
-      setText("read-status", "Lien incomplet : cle manquante.")
+      setText("read-status", "Incomplete link: missing key.")
       return
     }
 
     decryptButton.disabled = true
-    decryptButton.textContent = "Dechiffrement..."
+    decryptButton.textContent = "Decrypting..."
 
     try {
       const cryptoKey = await crypto.subtle.importKey(
@@ -212,7 +212,7 @@ async function bootReadPage(root) {
       const payload = await readJson(response)
 
       if (!response.ok) {
-        throw new Error("Secret introuvable, expire ou deja lu.")
+        throw new Error("Secret not found, expired, or already read.")
       }
 
       const plaintextBuffer = await crypto.subtle.decrypt(
@@ -227,16 +227,16 @@ async function bootReadPage(root) {
       history.replaceState(null, "", `${window.location.pathname}${window.location.search}`)
       secretOutput.hidden = false
       secretOutput.textContent = textDecoder.decode(plaintextBuffer)
-      setText("read-status", "Secret dechiffre localement. Le fragment a ete efface de l'URL.")
+      setText("read-status", "Secret decrypted locally. The fragment has been removed from the URL.")
       decryptButton.disabled = true
-      decryptButton.textContent = "Secret deja lu"
+      decryptButton.textContent = "Secret already read"
       return
     } catch (error) {
       setText("read-status", mapReadErrorMessage(error))
     }
 
     decryptButton.disabled = false
-    decryptButton.textContent = "Dechiffrer le secret"
+    decryptButton.textContent = "Decrypt secret"
   })
 }
 
@@ -267,50 +267,50 @@ function mapCreateErrorMessage(error) {
   const message = error && error.message ? error.message : ""
 
   if (message.includes("temporarily disabled")) {
-    return "La creation est temporairement desactivee."
+    return "Secret creation is temporarily disabled."
   }
 
   if (message.includes("global active secret quota")) {
-    return "Le service a atteint sa limite de secrets actifs. Reessayez plus tard."
+    return "The service has reached its active secret limit. Please try again later."
   }
 
   if (message.includes("global storage quota")) {
-    return "Le service a atteint sa limite de stockage. Reessayez plus tard."
+    return "The service has reached its storage limit. Please try again later."
   }
 
   if (message.includes("turnstile_token")) {
-    return "La verification anti-abus n'est pas encore active cote interface."
+    return "The anti-abuse verification is not wired into the UI yet."
   }
 
-  return message || "La creation du secret a echoue."
+  return message || "Secret creation failed."
 }
 
 function mapReadErrorMessage(error) {
   const message = error && error.message ? error.message : ""
 
-  if (message.includes("introuvable") || message.includes("expire") || message.includes("deja lu")) {
-    return "Secret introuvable, expire ou deja lu."
+  if (message.includes("not found") || message.includes("expired") || message.includes("already read")) {
+    return "Secret not found, expired, or already read."
   }
 
   if (message.includes("Invalid key length") || message.includes("DataError")) {
-    return "Cle invalide ou mal formee. Verifiez le lien complet avant de relancer la lecture."
+    return "Invalid or malformed key. Check the full link before trying again."
   }
 
-  if (message.includes("decrypt") || message.includes("dechiffrer") || message.includes("OperationError")) {
-    return "Cle invalide ou donnees corrompues. Verifiez le lien complet."
+  if (message.includes("decrypt") || message.includes("OperationError")) {
+    return "Invalid key or corrupted data. Check the full link."
   }
 
-  return message || "Impossible de dechiffrer ce secret."
+  return message || "Unable to decrypt this secret."
 }
 
 function mapDeleteErrorMessage(error) {
   const message = error && error.message ? error.message : ""
 
   if (message.includes("not found")) {
-    return "Le secret est deja indisponible."
+    return "The secret is already unavailable."
   }
 
-  return message || "La suppression anticipee a echoue."
+  return message || "Early deletion failed."
 }
 
 async function readJson(response) {
