@@ -1,42 +1,89 @@
 # psst-rs
 
-`psst` est un service minimal de partage de secrets a lecture unique. Le nom technique du projet reste `psst-rs`.
+`psst` is a minimal single-read secret sharing service. The technical project name remains `psst-rs`.
 
-Le secret est chiffre dans le navigateur avec AES-GCM. Le serveur ne recoit que le `ciphertext` et le `nonce`. La cle reste uniquement dans le fragment d'URL, apres `#`.
+The secret is encrypted in the browser with AES-GCM. The server only receives the `ciphertext` and the `nonce`. The key stays only in the URL fragment after `#`.
 
-## Prerequis
+## Project Scope
 
-- Rust et Cargo
-- Node.js recent pour les tests frontend automatises
-- un navigateur recent avec Web Crypto API
+`psst-rs` is meant to transport small secrets ephemerally, not manage them long term.
 
-## Lancer les tests automatises
+The service is meant to:
 
-Compilation rapide :
+- create a small secret and return a shareable link;
+- let the recipient read that secret exactly once;
+- delete it automatically after reading or expiration;
+- delete a secret before it is read from the browser that created it.
+
+The service is not trying to cover:
+
+- user accounts, login flows, roles, or rich administration;
+- attachments, file uploads, or large payloads;
+- permanent secrets, multi-read links, or secret history;
+- search, secret listings, or an open public API;
+- HTML rendering of secret content.
+
+## Invariants To Preserve
+
+These points are the core product contract. Contributions should preserve them:
+
+- the secret is encrypted in the browser; the key must never be sent to the server;
+- the key stays in the URL fragment and must not be retransmitted by the JavaScript;
+- the maximum cleartext secret size is `16 KiB`;
+- reads must stay atomic: only one request can consume a secret;
+- the service must not log the cleartext secret, the key, the URL fragment, the full request body, or sensitive tokens;
+- creation must stay protected by Turnstile and application-side limits.
+
+## Reference Architecture
+
+The target deployment stays intentionally simple:
+
+```text
+Client browser
+  -> HTTPS
+Cloudflare
+  -> HTTPS
+nginx
+  -> HTTP local
+psst-rs on 127.0.0.1:3000
+  -> SQLite
+```
+
+The Rust application is not meant to terminate TLS itself. It listens locally behind the reverse proxy.
+
+## Prerequisites
+
+- Rust and Cargo
+- a recent Node.js for automated frontend tests
+- a recent browser with the Web Crypto API
+
+## Run Automated Tests
+
+Quick compile check:
 
 ```bash
 cargo check
 ```
 
-Suite de tests :
+Full test suite:
 
 ```bash
 make test
 ```
 
-Ou en detail :
+Or in detail:
 
 ```bash
 make test-rust
 make test-frontend
 ```
 
-## Deploiement home lab
+## Home Lab Deployment
 
-Le flux le plus simple passe par le `Makefile` du repo.
+The simplest flow goes through the repository `Makefile`.
 
-1. Cree `.env` a la racine depuis `.env.example`.
-2. Renseigne :
+1. Create `.env` at the repository root from `.env.example`.
+2. Fill in:
 
 ```dotenv
 CLOUDFLARE_API_TOKEN=...
@@ -44,60 +91,60 @@ PSST_TURNSTILE_SITE_KEY=...
 PSST_TURNSTILE_SECRET_KEY=...
 ```
 
-3. Lance :
+3. Run:
 
 ```bash
 make deploy
 ```
 
-Cette commande :
+This command:
 
-- compile un binaire release compatible Alpine via musl ;
-- le copie vers `ansible/files/bin/psst-rs` ;
-- applique Terraform ;
-- deploie avec Ansible ;
-- verifie en fin de playbook que `/healthz` repond a la fois via `psst-rs` en direct et via nginx.
+- builds an Alpine-compatible release binary with musl;
+- copies it to `ansible/files/bin/psst-rs`;
+- applies Terraform;
+- deploys with Ansible;
+- verifies at the end of the playbook that `/healthz` responds both from `psst-rs` directly and through nginx.
 
-Le fichier `.env` est ignore par Git. Ne committe pas de secrets ; garde seulement `.env.example` dans le repo.
+The `.env` file is ignored by Git. Do not commit secrets; only keep `.env.example` in the repository.
 
-Pour le dev local, `make build-release` conserve un build natif de ta machine. Le packaging de deploiement passe par `make build-release-alpine` dans un conteneur Docker.
+For local development, `make build-release` keeps a native build for your machine. Deployment packaging goes through `make build-release-alpine` in a Docker container.
 
-Si Terraform est deja applique et que tu veux seulement redéployer l'application :
+If Terraform is already applied and you only want to redeploy the application:
 
 ```bash
 make deploy-no-terraform
 ```
 
-Les tests couvrent actuellement :
+Tests currently cover:
 
-- la configuration ;
-- la couche SQLite ;
-- le cycle de vie des secrets ;
-- les routes HTTP ;
-- les shells HTML utilises par l'interface navigateur ;
-- les chemins critiques du frontend navigateur : chiffrement/dechiffrement local, compteur UTF-8, gestion du fragment et erreurs de lien.
+- configuration;
+- the SQLite layer;
+- the secret lifecycle;
+- HTTP routes;
+- the HTML shells used by the browser UI;
+- critical browser frontend paths: local encryption/decryption, UTF-8 byte counting, fragment handling, and link errors.
 
-## Lancer le service en local
+## Run The Service Locally
 
-Par defaut, l'application essaie d'utiliser `/var/lib/psst-rs/secrets.db`, ce qui n'est pas pratique en dev. Pour un test local, utilise un chemin dans `/tmp`.
+By default, the application tries to use `/var/lib/psst-rs/secrets.db`, which is not convenient for development. For a local test, use a path in `/tmp`.
 
 ```bash
 SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db cargo run
 ```
 
-Le serveur ecoute ensuite sur :
+The server then listens on:
 
 ```text
 http://127.0.0.1:3000
 ```
 
-Verification rapide :
+Quick check:
 
 ```bash
 curl -i http://127.0.0.1:3000/healthz
 ```
 
-La reponse attendue est :
+The expected response is:
 
 ```text
 HTTP/1.1 200 OK
@@ -106,29 +153,29 @@ HTTP/1.1 200 OK
 ok
 ```
 
-## Tester le flux principal dans le navigateur
+## Test The Main Browser Flow
 
-1. Lance le serveur localement :
+1. Start the server locally:
 
    ```bash
    SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db cargo run
    ```
 
-2. Ouvre `http://127.0.0.1:3000/`.
+2. Open `http://127.0.0.1:3000/`.
 
-3. Saisis un secret dans le textarea.
+3. Enter a secret in the textarea.
 
-4. Choisis une expiration.
+4. Choose an expiration.
 
-5. Clique sur `Create psst link`.
+5. Click `Create psst link`.
 
-6. Verifie qu'un lien apparait sous la forme :
+6. Check that a link appears in this form:
 
    ```text
-   https://example.tld/s/<id>#<cle>
+   https://example.tld/s/<id>#<key>
    ```
 
-   En local, l'hote du lien depend de `SECRET_RS_PUBLIC_BASE_URL`. Par defaut il vaut `https://example.tld`. Pour un test local plus naturel tu peux lancer :
+   Locally, the link host depends on `SECRET_RS_PUBLIC_BASE_URL`. By default it is `https://example.tld`. For a more natural local test you can run:
 
    ```bash
    SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db \
@@ -136,13 +183,13 @@ ok
    cargo run
    ```
 
-### Turnstile en local
+### Turnstile Locally
 
-Si ton widget Turnstile echoue sur `http://127.0.0.1:3000` ou `http://localhost:3000`, la cause la plus probable est que ta cle Cloudflare de production n'autorise pas les domaines locaux.
+If your Turnstile widget fails on `http://127.0.0.1:3000` or `http://localhost:3000`, the most likely cause is that your production Cloudflare key does not allow local domains.
 
-Deux options simples :
+Two simple options:
 
-1. utiliser les cles de test Cloudflare en local :
+1. use Cloudflare test keys locally:
 
    ```bash
    SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db \
@@ -152,30 +199,30 @@ Deux options simples :
    cargo run
    ```
 
-2. ou autoriser `localhost` et `127.0.0.1` dans la configuration Hostname Management de ton widget Turnstile.
+2. or allow `localhost` and `127.0.0.1` in your Turnstile widget Hostname Management configuration.
 
-Les cles de test Cloudflare fonctionnent sur les domaines locaux et renvoient toujours une validation reussie pour ce couple de test. Source : Cloudflare Turnstile testing docs (`https://developers.cloudflare.com/turnstile/troubleshooting/testing/`).
+Cloudflare test keys work on local domains and always return a successful validation for this test pair. Source: Cloudflare Turnstile testing docs (`https://developers.cloudflare.com/turnstile/troubleshooting/testing/`).
 
-7. Ouvre le lien complet dans un autre onglet ou une autre fenetre.
+7. Open the full link in another tab or window.
 
-8. Verifie que le secret s'affiche correctement.
+8. Verify that the secret is displayed correctly.
 
-9. Recharge la page de lecture. Le secret doit maintenant etre introuvable, car il a ete consomme.
+9. Reload the read page. The secret should now be unavailable because it has been consumed.
 
-## Tester la suppression anticipee
+## Test Early Deletion
 
-1. Cree un secret depuis la page d'accueil.
-2. Clique sur `Supprimer maintenant`.
-3. Ouvre ensuite le lien genere.
-4. Le secret doit etre indisponible.
+1. Create a secret from the home page.
+2. Click `Delete now`.
+3. Then open the generated link.
+4. The secret should be unavailable.
 
-Important : le `delete_token` est conserve uniquement en memoire dans le navigateur courant. Si tu fermes la page avant de cliquer sur `Supprimer maintenant`, tu perds cette possibilite pour cette session de test.
+Important: the `delete_token` is only kept in memory in the current browser. If you close the page before clicking `Delete now`, you lose that option for this test session.
 
-## Tester quelques cas limites utiles
+## Test A Few Useful Edge Cases
 
-### Creation desactivee
+### Creation Disabled
 
-Lance le serveur avec :
+Run the server with:
 
 ```bash
 SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db \
@@ -183,62 +230,62 @@ SECRET_RS_ENABLE_CREATE=false \
 cargo run
 ```
 
-Effet attendu :
+Expected effect:
 
-- le formulaire est desactive ;
-- l'interface affiche que la creation est temporairement desactivee.
+- the form is disabled;
+- the UI shows that creation is temporarily disabled.
 
-### Cle manquante
+### Missing Key
 
-1. Cree un secret.
-2. Ouvre `/s/<id>` sans la partie `#<cle>`.
+1. Create a secret.
+2. Open `/s/<id>` without the `#<key>` part.
 
-Effet attendu :
+Expected effect:
 
-- la page affiche `Lien incomplet : cle manquante.`
+- the page shows `Incomplete link: missing key.`
 
-### Secret deja lu ou supprime
+### Secret Already Read Or Deleted
 
-1. Lis un secret une premiere fois, ou supprime-le avec `Supprimer maintenant`.
-2. Reviens sur le meme lien.
+1. Read a secret once, or delete it with `Delete now`.
+2. Return to the same link.
 
-Effet attendu :
+Expected effect:
 
-- la page affiche que le secret est introuvable, expire ou deja lu.
+- the page shows that the secret was not found, expired, or already read.
 
-## Variables d'environnement utiles en dev
+## Useful Environment Variables For Development
 
-- `SECRET_RS_DATABASE_PATH` : chemin du fichier SQLite
-- `SECRET_RS_PUBLIC_BASE_URL` : base utilisee pour construire le lien final
-- `SECRET_RS_BIND_ADDR` : adresse d'ecoute, par defaut `127.0.0.1:3000`
-- `SECRET_RS_ENABLE_CREATE` : active ou desactive la creation
-- `SECRET_RS_MAX_SECRET_BYTES` : limite plaintext avant chiffrement, par defaut `16384`
-- `SECRET_RS_TURNSTILE_SITE_KEY` : cle publique Turnstile
-- `SECRET_RS_TURNSTILE_SECRET_KEY` : cle privee Turnstile
-- `SECRET_RS_IP_HASH_SALT` : sel serveur utilise pour pseudonymiser les IP
-- `SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE` : limite de creation par minute et par IP hashée, par defaut `5`
-- `SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR` : limite de creation par heure et par IP hashée, par defaut `30`
-- `SECRET_RS_READ_RATE_LIMIT_PER_MINUTE` : limite souple de lecture par minute et par IP hashée, par defaut `60`
+- `SECRET_RS_DATABASE_PATH`: SQLite file path
+- `SECRET_RS_PUBLIC_BASE_URL`: base used to build the final link
+- `SECRET_RS_BIND_ADDR`: listening address, default `127.0.0.1:3000`
+- `SECRET_RS_ENABLE_CREATE`: enable or disable creation
+- `SECRET_RS_MAX_SECRET_BYTES`: cleartext limit before encryption, default `16384`
+- `SECRET_RS_TURNSTILE_SITE_KEY`: Turnstile public key
+- `SECRET_RS_TURNSTILE_SECRET_KEY`: Turnstile private key
+- `SECRET_RS_IP_HASH_SALT`: server salt used to pseudonymize IPs
+- `SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE`: create limit per minute per hashed IP, default `5`
+- `SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR`: create limit per hour per hashed IP, default `30`
+- `SECRET_RS_READ_RATE_LIMIT_PER_MINUTE`: soft read limit per minute per hashed IP, default `60`
 
 ## Rate limiting
 
-Le service applique maintenant :
+The service currently applies:
 
-- une limite de creation par minute et par heure, basee sur une IP pseudonymisee ;
-- une limite souple de lecture par minute, egalement basee sur une IP pseudonymisee ;
-- des quotas globaux distincts sur le nombre de secrets actifs et le volume stocke.
+- a create limit per minute and per hour based on a pseudonymized IP;
+- a soft read limit per minute, also based on a pseudonymized IP;
+- separate global quotas on the number of active secrets and the stored volume.
 
-Les limites IP renvoient `429 Too Many Requests`. Les indisponibilites globales, comme la creation desactivee ou un quota global depasse, renvoient `503 Service Unavailable`.
+IP-based limits return `429 Too Many Requests`. Global unavailability, such as creation being disabled or a global quota being exceeded, returns `503 Service Unavailable`.
 
-Le detail du comportement est documente dans [docs/rate-limiting.md](docs/rate-limiting.md).
+Behavior details are documented in [docs/rate-limiting.md](docs/rate-limiting.md).
 
-## Etat actuel
+## Current Status
 
-Ce depot couvre aujourd'hui :
+This repository currently covers:
 
-- le backend de creation, lecture unique et suppression ;
-- le chiffrement/dechiffrement dans le navigateur ;
-- l'interface v1 ;
-- les tests backend et HTTP ;
-- la verification Turnstile cote serveur ;
-- le rate limiting de creation et de lecture.
+- the backend for creation, single-read access, and deletion;
+- browser-side encryption/decryption;
+- the v1 interface;
+- backend and HTTP tests;
+- server-side Turnstile verification;
+- create and read rate limiting.
