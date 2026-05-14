@@ -86,6 +86,7 @@ ansible-playbook site.yml --ask-become-pass
 Les variables principales sont dans `group_vars/all.yml` :
 
 - domaine public ;
+- chemin du healthcheck ;
 - chemins de deploiement ;
 - variables d'environnement de l'application ;
 - chemins des certificats TLS ;
@@ -111,3 +112,12 @@ Le playbook lit par defaut `PSST_TURNSTILE_SITE_KEY` et `PSST_TURNSTILE_SECRET_K
 Si `psst_enable_create: true`, le playbook echoue tant que ces deux valeurs ne sont pas definies.
 
 Le service OpenRC lance `psst-rs` via un petit wrapper shell qui source explicitement `{{ psst_env_file | default('/etc/psst-rs/psst-rs.env') }}` avant d'exec le binaire. Cela evite les ambiguïtés de chargement d'environnement avec `openrc-run`.
+
+## Smoke test post-deploiement
+
+Apres avoir applique les changements et vide les handlers en attente, le playbook verifie automatiquement deux chemins :
+
+- l'application directement sur `http://{{ psst_bind_addr | default('127.0.0.1:3000') }}{{ psst_healthcheck_path | default('/healthz') }}` ;
+- nginx en local sur `https://127.0.0.1{{ psst_healthcheck_path | default('/healthz') }}` avec l'en-tete `Host: {{ psst_domain | default('psst.example.com') }}`.
+
+Le second test valide le chainage `nginx -> psst-rs` sans dependre d'un hairpin DNS ni de Cloudflare. La verification TLS est volontairement desactivee pour ce test local car le certificat Origin CA installe sur la VM n'est pas une chaine publique faite pour etre verifiee directement par le serveur lui-meme.

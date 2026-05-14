@@ -301,6 +301,40 @@
         name: nginx
         state: started
 
+    - name: Apply pending service restarts before smoke tests
+      ansible.builtin.meta: flush_handlers
+
+    - name: Smoke test application health endpoint directly
+      ansible.builtin.uri:
+        url: "http://{{ psst_bind_addr }}{{ psst_healthcheck_path }}"
+        method: GET
+        return_content: true
+        status_code: 200
+      register: psst_app_healthcheck
+      retries: 12
+      delay: 5
+      until:
+        - psst_app_healthcheck.status == 200
+        - psst_app_healthcheck.content | trim == "ok"
+      changed_when: false
+
+    - name: Smoke test nginx TLS reverse proxy locally
+      ansible.builtin.uri:
+        url: "https://127.0.0.1{{ psst_healthcheck_path }}"
+        method: GET
+        headers:
+          Host: "{{ psst_domain }}"
+        return_content: true
+        status_code: 200
+        validate_certs: false
+      register: psst_nginx_healthcheck
+      retries: 12
+      delay: 5
+      until:
+        - psst_nginx_healthcheck.status == 200
+        - psst_nginx_healthcheck.content | trim == "ok"
+      changed_when: false
+
   handlers:
     - name: Restart psst-rs
       ansible.builtin.service:

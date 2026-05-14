@@ -19,6 +19,7 @@ psst_resolv_nameservers:
 psst_domain: "psst.example.com"
 psst_public_base_url: "https://{{ psst_domain }}"
 psst_bind_addr: "127.0.0.1:3000"
+psst_healthcheck_path: "/healthz"
 
 psst_binary_src: "files/bin/psst-rs"
 psst_binary_dest: "/usr/local/bin/psst-rs"
