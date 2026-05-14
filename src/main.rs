@@ -27,7 +27,8 @@ async fn main() -> Result<()> {
 
     axum::serve(
         listener,
-        build_router(config.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        build_router(config.clone(), database)
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .await?;
     Ok(())

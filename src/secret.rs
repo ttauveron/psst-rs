@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 
 const SECRET_ID_BYTES: usize = 16;
 const DELETE_TOKEN_BYTES: usize = 32;
+pub const ALLOWED_TTL_SECONDS: [u64; 4] = [15 * 60, 60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct CreateSecretRequest {
@@ -61,6 +62,10 @@ pub fn hash_delete_token(delete_token: &str) -> String {
     URL_SAFE_NO_PAD.encode(digest)
 }
 
+pub fn is_allowed_ttl(ttl_seconds: u64) -> bool {
+    ALLOWED_TTL_SECONDS.contains(&ttl_seconds)
+}
+
 fn generate_random_token<const N: usize>() -> String {
     let bytes: [u8; N] = rand::random();
     URL_SAFE_NO_PAD.encode(bytes)
@@ -71,8 +76,8 @@ mod tests {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
     use super::{
-        DELETE_TOKEN_BYTES, GeneratedSecretReference, SECRET_ID_BYTES, generate_secret_reference,
-        hash_delete_token,
+        ALLOWED_TTL_SECONDS, DELETE_TOKEN_BYTES, GeneratedSecretReference, SECRET_ID_BYTES,
+        generate_secret_reference, hash_delete_token, is_allowed_ttl,
     };
 
     #[test]
@@ -106,6 +111,16 @@ mod tests {
         assert_ne!(first.secret_id, second.secret_id);
         assert_ne!(first.delete_token, second.delete_token);
         assert_ne!(first.delete_token_hash, second.delete_token_hash);
+    }
+
+    #[test]
+    fn ttl_allowlist_matches_supported_values() {
+        for ttl in ALLOWED_TTL_SECONDS {
+            assert!(is_allowed_ttl(ttl));
+        }
+
+        assert!(!is_allowed_ttl(42));
+        assert!(!is_allowed_ttl(30 * 24 * 60 * 60));
     }
 
     fn decode_len(value: &str) -> usize {
