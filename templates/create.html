@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>psst</title>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" defer></script>
     <link rel="stylesheet" href="/static/app.css">
     <script src="/static/app.js" defer></script>
   </head>
@@ -14,6 +15,7 @@
       data-public-base-url="{{PUBLIC_BASE_URL}}"
       data-max-secret-bytes="{{MAX_SECRET_BYTES}}"
       data-enable-create="{{ENABLE_CREATE}}"
+      data-turnstile-site-key="{{TURNSTILE_SITE_KEY}}"
     >
       <header class="hero hero-create">
         <div class="brand-lockup">
@@ -44,6 +46,9 @@
 
           <div class="actions">
             <button id="create-button" type="submit">Create psst link</button>
+          </div>
+          <div class="turnstile-shell">
+            <div id="turnstile-widget" aria-live="polite"></div>
           </div>
         </form>
 

@@ -7,10 +7,16 @@ edition = "2024"
 anyhow = "1.0"
 axum = "0.8"
 base64 = "0.22"
+bytes = "1.11"
+http-body-util = "0.1"
+hyper = "1.9"
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "tls12", "webpki-roots"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"] }
 rand = "0.9"
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_urlencoded = "0.7"
 sha2 = "0.10"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "net"] }
 tracing = "0.1"

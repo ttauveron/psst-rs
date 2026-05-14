@@ -6,7 +6,7 @@ use std::{
 use axum::{
     Json, Router,
     body::Body,
-    extract::{ConnectInfo, DefaultBodyLimit, MatchedPath, Path, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Extension, MatchedPath, Path, Request, State},
     http::{
         HeaderValue, Response, StatusCode,
         header::{
@@ -17,6 +17,14 @@ use axum::{
     middleware::{self, Next},
     response::{Html, IntoResponse},
     routing::{get, post},
+};
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::Request as HyperRequest;
+use hyper_rustls::HttpsConnectorBuilder;
+use hyper_util::{
+    client::legacy::{Client, connect::HttpConnector},
+    rt::TokioExecutor,
 };
 use tracing::info;
 
@@ -32,6 +40,7 @@ use crate::{
 };
 
 static HEADER_PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
+type TurnstileHttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>;
 
 const HTML_CSP: &str = concat!(
     "default-src 'self'; ",
@@ -49,6 +58,7 @@ const HTML_CSP: &str = concat!(
 struct AppState {
     config: AppConfig,
     secret_store: SecretStore,
+    turnstile_client: TurnstileHttpClient,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -101,6 +111,7 @@ pub fn build_router(config: AppConfig, database: Database) -> Router {
     let app_state = AppState {
         config: config.clone(),
         secret_store: SecretStore::new(database),
+        turnstile_client: build_turnstile_client(),
     };
 
     Router::new()
@@ -145,8 +156,19 @@ async fn static_app_js() -> impl IntoResponse {
     )
 }
 
+fn build_turnstile_client() -> TurnstileHttpClient {
+    let https = HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_or_http()
+        .enable_http1()
+        .build();
+
+    Client::builder(TokioExecutor::new()).build(https)
+}
+
 async fn create_secret_stub(
     axum::extract::State(state): axum::extract::State<AppState>,
+    client_ip: Option<Extension<ClientIp>>,
     Json(payload): Json<CreateSecretRequest>,
 ) -> Result<Json<CreateSecretResponse>, ApiError> {
     let now_timestamp = current_timestamp()?;
@@ -155,7 +177,12 @@ async fn create_secret_stub(
     ensure_create_enabled(&state.config)?;
     enforce_global_create_quotas(&state, now_timestamp, validated.ciphertext_size_bytes)?;
     check_create_rate_limit_hook(&state)?;
-    verify_turnstile_hook(&payload)?;
+    verify_turnstile(
+        &state,
+        client_ip.map(|Extension(client_ip)| client_ip.0),
+        &payload,
+    )
+    .await?;
 
     let generated = generate_secret_reference();
     let expires_at = now_timestamp
@@ -254,9 +281,23 @@ fn render_index_page(config: &AppConfig) -> String {
     render_template(
         include_str!("../templates/create.html"),
         &[
-            ("{{PUBLIC_BASE_URL}}", &escape_html_attribute(&config.public_base_url)),
+            (
+                "{{PUBLIC_BASE_URL}}",
+                &escape_html_attribute(&config.public_base_url),
+            ),
             ("{{MAX_SECRET_BYTES}}", &config.max_secret_bytes.to_string()),
-            ("{{ENABLE_CREATE}}", if config.enable_create { "true" } else { "false" }),
+            (
+                "{{ENABLE_CREATE}}",
+                if config.enable_create {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+            (
+                "{{TURNSTILE_SITE_KEY}}",
+                &escape_html_attribute(&config.turnstile_site_key),
+            ),
             ("{{TTL_OPTIONS}}", &ttl_options),
         ],
     )
@@ -469,10 +510,76 @@ fn check_create_rate_limit_hook(_state: &AppState) -> Result<(), ApiError> {
     Ok(())
 }
 
-// Step 7 hook: Turnstile verification will be wired here without reshaping the handler.
-fn verify_turnstile_hook(payload: &CreateSecretRequest) -> Result<(), ApiError> {
+#[derive(Debug, serde::Serialize)]
+struct TurnstileVerifyRequest<'a> {
+    secret: &'a str,
+    response: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remoteip: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TurnstileVerifyResponse {
+    success: bool,
+    #[serde(rename = "error-codes", default)]
+    error_codes: Vec<String>,
+}
+
+async fn verify_turnstile(
+    state: &AppState,
+    client_ip: Option<std::net::IpAddr>,
+    payload: &CreateSecretRequest,
+) -> Result<(), ApiError> {
     if payload.turnstile_token.is_empty() {
         return Err(ApiError::bad_request("turnstile_token must not be empty"));
+    }
+
+    let response = state
+        .turnstile_client
+        .request(
+            HyperRequest::post(&state.config.turnstile_verify_url)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Full::new(Bytes::from(
+                    serde_urlencoded::to_string(TurnstileVerifyRequest {
+                        secret: &state.config.turnstile_secret_key,
+                        response: &payload.turnstile_token,
+                        remoteip: client_ip.map(|ip| ip.to_string()),
+                    })
+                    .map_err(|error| {
+                        ApiError::internal(format!(
+                            "failed to encode turnstile verification payload: {error}"
+                        ))
+                    })?,
+                )))
+                .map_err(|error| {
+                    ApiError::internal(format!(
+                        "failed to build turnstile verification request: {error}"
+                    ))
+                })?,
+        )
+        .await
+        .map_err(|error| {
+            ApiError::service_unavailable(format!("turnstile verification is unavailable: {error}"))
+        })?;
+
+    let response_body = response.into_body().collect().await.map_err(|error| {
+        ApiError::service_unavailable(format!("turnstile verification is unavailable: {error}"))
+    })?;
+    let verification: TurnstileVerifyResponse = serde_json::from_slice(&response_body.to_bytes())
+        .map_err(|error| {
+        ApiError::service_unavailable(format!("turnstile verification is unavailable: {error}"))
+    })?;
+
+    if !verification.success {
+        let details = if verification.error_codes.is_empty() {
+            "unknown error".to_owned()
+        } else {
+            verification.error_codes.join(",")
+        };
+
+        return Err(ApiError::bad_request(format!(
+            "turnstile verification failed: {details}"
+        )));
     }
 
     Ok(())
@@ -493,8 +600,11 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use axum::{
+        Json,
         body::Body,
         http::{Method, Request, StatusCode, header},
+        response::IntoResponse,
+        routing::post,
     };
     use serde_json::Value;
     use tower::util::ServiceExt;
@@ -560,13 +670,19 @@ mod tests {
 
         assert!(html.contains(r#"id="create-app""#));
         assert!(html.contains(r#"data-max-secret-bytes="16384""#));
+        assert!(html.contains(r#"data-turnstile-site-key="test-turnstile-site-key""#));
+        assert!(html.contains("challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"));
         assert!(html.contains(r#"src="/static/app.js""#));
         assert!(html.contains(r#"href="/static/app.css""#));
-        assert!(html.contains("Share it quietly."));
-        assert!(html.contains("<strong>psst</strong> creates one-time secret links with client-side encryption."));
+        assert!(html.contains("Share a secret."));
+        assert!(html.contains(
+            "<strong>psst</strong> creates one-time secret links with client-side encryption."
+        ));
         assert!(html.contains("Create psst link"));
         assert!(html.contains("Delete now"));
-        assert!(html.contains("nothing can be recovered after read, expiration, or early deletion"));
+        assert!(
+            html.contains("nothing can be recovered after read, expiration, or early deletion")
+        );
         assert!(html.contains("The recipient can read the secret only once"));
     }
 
@@ -596,7 +712,11 @@ mod tests {
         assert!(html.contains("Click to decrypt the secret"));
         assert!(html.contains(r#"id="decrypt-secret-button""#));
         assert!(html.contains(r#"src="/static/app.js""#));
-        assert!(html.contains("<strong>psst</strong> cannot help if the fragment key is missing or wrong"));
+        assert!(
+            html.contains(
+                "<strong>psst</strong> cannot help if the fragment key is missing or wrong"
+            )
+        );
     }
 
     #[tokio::test]
@@ -679,7 +799,10 @@ mod tests {
 
     #[tokio::test]
     async fn create_route_persists_secret_and_returns_reference() {
-        let (_guard, app, database) = test_router("create-success", AppConfig::default());
+        let verifier = start_turnstile_test_server(TurnstileScenario::Success).await;
+        let mut config = AppConfig::default();
+        config.turnstile_verify_url = verifier.url.clone();
+        let (_guard, app, database) = test_router("create-success", config);
 
         let response = app
             .oneshot(
@@ -688,7 +811,7 @@ mod tests {
                     .uri("/api/create")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"dummy-token"}"#,
+                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"valid-turnstile-token"}"#,
                     ))
                     .expect("request should build"),
             )
@@ -731,6 +854,53 @@ mod tests {
         assert_eq!(stored.0, "ciphertext-value");
         assert_eq!(stored.1, "nonce-value");
         assert_eq!(stored.2, hash_delete_token(delete_token));
+    }
+
+    #[tokio::test]
+    async fn create_route_rejects_failed_turnstile_verification() {
+        let verifier = start_turnstile_test_server(TurnstileScenario::Failure).await;
+        let mut config = AppConfig::default();
+        config.turnstile_verify_url = verifier.url.clone();
+        let (_guard, app, _database) = test_router("turnstile-failure", config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/create")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"invalid-turnstile-token"}"#,
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_route_returns_503_when_turnstile_verifier_is_unavailable() {
+        let mut config = AppConfig::default();
+        config.turnstile_verify_url = "http://127.0.0.1:9/siteverify".to_owned();
+        let (_guard, app, _database) = test_router("turnstile-unavailable", config);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/create")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"valid-turnstile-token"}"#,
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
@@ -1152,6 +1322,61 @@ mod tests {
     }
 
     struct TestTempDirGuard(std::path::PathBuf);
+
+    #[derive(Clone, Copy)]
+    enum TurnstileScenario {
+        Success,
+        Failure,
+    }
+
+    struct TurnstileTestServer {
+        url: String,
+        handle: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for TurnstileTestServer {
+        fn drop(&mut self) {
+            self.handle.abort();
+        }
+    }
+
+    async fn start_turnstile_test_server(scenario: TurnstileScenario) -> TurnstileTestServer {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let app = axum::Router::new()
+            .route("/siteverify", post(turnstile_test_handler))
+            .with_state(scenario);
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("turnstile test server should run");
+        });
+
+        TurnstileTestServer {
+            url: format!("http://{addr}/siteverify"),
+            handle,
+        }
+    }
+
+    async fn turnstile_test_handler(
+        axum::extract::State(scenario): axum::extract::State<TurnstileScenario>,
+        axum::extract::Form(form): axum::extract::Form<std::collections::HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        let success = matches!(scenario, TurnstileScenario::Success)
+            && form.get("secret").map(String::as_str) == Some("test-turnstile-secret-key")
+            && form.get("response").map(String::as_str) == Some("valid-turnstile-token");
+
+        Json(serde_json::json!({
+            "success": success,
+            "error-codes": if success {
+                Vec::<String>::new()
+            } else {
+                vec!["invalid-input-response".to_owned()]
+            },
+        }))
+    }
 
     fn insert_test_secret(
         database: &Database,

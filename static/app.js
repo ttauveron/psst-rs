@@ -1,7 +1,6 @@
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 const AES_GCM_NONCE_BYTES = 12
-const TURNSTILE_PLACEHOLDER_TOKEN = "pending-step-7"
 let latestSecretReference = null
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -33,6 +32,7 @@ async function bootCreatePage(root) {
   const deleteButton = document.getElementById("delete-secret-button")
   const maxSecretBytes = Number(root.dataset.maxSecretBytes)
   const enableCreate = root.dataset.enableCreate === "true"
+  const turnstileSiteKey = root.dataset.turnstileSiteKey || ""
 
   updateSecretSize(input.value, maxSecretBytes)
   input.addEventListener("input", () => {
@@ -46,6 +46,8 @@ async function bootCreatePage(root) {
     setText("create-status", "Secret creation is temporarily disabled.")
     return
   }
+
+  const turnstileState = mountTurnstile(turnstileSiteKey)
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault()
@@ -66,6 +68,16 @@ async function bootCreatePage(root) {
         "create-status",
         `The secret exceeds the ${maxSecretBytes} UTF-8 byte limit.`,
       )
+      return
+    }
+
+    if (!turnstileState.ready) {
+      setText("create-status", "Anti-abuse verification failed to load. Reload the page and try again.")
+      return
+    }
+
+    if (!turnstileState.token) {
+      setText("create-status", "Complete the anti-abuse verification before creating a secret.")
       return
     }
 
@@ -93,7 +105,7 @@ async function bootCreatePage(root) {
           ciphertext: bytesToBase64Url(ciphertext),
           nonce: bytesToBase64Url(nonce),
           expires_in_seconds: Number(ttlSelect.value),
-          turnstile_token: TURNSTILE_PLACEHOLDER_TOKEN,
+          turnstile_token: turnstileState.token,
         }),
       })
 
@@ -123,6 +135,7 @@ async function bootCreatePage(root) {
       latestSecretReference = null
       setText("create-status", mapCreateErrorMessage(error))
     } finally {
+      resetTurnstile(turnstileState)
       createButton.disabled = false
       createButton.textContent = "Create psst link"
     }
@@ -178,6 +191,50 @@ async function bootCreatePage(root) {
       deleteButton.disabled = false
     }
   })
+}
+
+function mountTurnstile(siteKey) {
+  const widgetRoot = document.getElementById("turnstile-widget")
+  const state = {
+    ready: false,
+    token: "",
+    widgetId: null,
+  }
+
+  if (!widgetRoot || !siteKey || !window.turnstile || typeof window.turnstile.render !== "function") {
+    return state
+  }
+
+  state.widgetId = window.turnstile.render(widgetRoot, {
+    sitekey: siteKey,
+    theme: "light",
+    callback(token) {
+      state.ready = true
+      state.token = token
+    },
+    "expired-callback"() {
+      state.ready = true
+      state.token = ""
+      setText("create-status", "Anti-abuse verification expired. Complete it again before retrying.")
+    },
+    "error-callback"() {
+      state.ready = false
+      state.token = ""
+      setText("create-status", "Anti-abuse verification failed to load. Reload the page and try again.")
+    },
+  })
+
+  state.ready = true
+  return state
+}
+
+function resetTurnstile(state) {
+  if (!state || state.widgetId === null || !window.turnstile || typeof window.turnstile.reset !== "function") {
+    return
+  }
+
+  state.token = ""
+  window.turnstile.reset(state.widgetId)
 }
 
 async function bootReadPage(root) {
@@ -279,8 +336,16 @@ function mapCreateErrorMessage(error) {
     return "The service has reached its storage limit. Please try again later."
   }
 
+  if (message.includes("turnstile verification failed")) {
+    return "Anti-abuse verification failed. Complete the challenge again and retry."
+  }
+
+  if (message.includes("turnstile verification is unavailable")) {
+    return "Anti-abuse verification is temporarily unavailable. Please try again later."
+  }
+
   if (message.includes("turnstile_token")) {
-    return "The anti-abuse verification is not wired into the UI yet."
+    return "Complete the anti-abuse verification before creating a secret."
   }
 
   return message || "Secret creation failed."
