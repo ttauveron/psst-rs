@@ -203,6 +203,24 @@ Effet attendu :
 - `SECRET_RS_BIND_ADDR` : adresse d'ecoute, par defaut `127.0.0.1:3000`
 - `SECRET_RS_ENABLE_CREATE` : active ou desactive la creation
 - `SECRET_RS_MAX_SECRET_BYTES` : limite plaintext avant chiffrement, par defaut `16384`
+- `SECRET_RS_TURNSTILE_SITE_KEY` : cle publique Turnstile
+- `SECRET_RS_TURNSTILE_SECRET_KEY` : cle privee Turnstile
+- `SECRET_RS_IP_HASH_SALT` : sel serveur utilise pour pseudonymiser les IP
+- `SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE` : limite de creation par minute et par IP hashée, par defaut `5`
+- `SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR` : limite de creation par heure et par IP hashée, par defaut `30`
+- `SECRET_RS_READ_RATE_LIMIT_PER_MINUTE` : limite souple de lecture par minute et par IP hashée, par defaut `60`
+
+## Rate limiting
+
+Le service applique maintenant :
+
+- une limite de creation par minute et par heure, basee sur une IP pseudonymisee ;
+- une limite souple de lecture par minute, egalement basee sur une IP pseudonymisee ;
+- des quotas globaux distincts sur le nombre de secrets actifs et le volume stocke.
+
+Les limites IP renvoient `429 Too Many Requests`. Les indisponibilites globales, comme la creation desactivee ou un quota global depasse, renvoient `503 Service Unavailable`.
+
+Le detail du comportement est documente dans [docs/rate-limiting.md](docs/rate-limiting.md).
 
 ## Etat actuel
 
@@ -211,6 +229,6 @@ Ce depot couvre aujourd'hui :
 - le backend de creation, lecture unique et suppression ;
 - le chiffrement/dechiffrement dans le navigateur ;
 - l'interface v1 ;
-- les tests backend et HTTP.
-
-La verification Turnstile cote serveur est branchee. Le rate limiting reste a faire.
+- les tests backend et HTTP ;
+- la verification Turnstile cote serveur ;
+- le rate limiting de creation et de lecture.
