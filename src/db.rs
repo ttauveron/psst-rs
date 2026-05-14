@@ -288,6 +288,67 @@ impl SecretStore {
             .context("failed to load active secret stats")
     }
 
+    pub fn rate_limit_count(&self, key: &str, bucket: i64) -> Result<u64> {
+        let connection = self.database.open_connection()?;
+        connection
+            .query_row(
+                "SELECT COALESCE(count, 0)
+                 FROM rate_limits
+                 WHERE key = ?1 AND bucket = ?2",
+                params![key, bucket],
+                |row| {
+                    let count: i64 = row.get(0)?;
+                    u64::try_from(count).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Integer,
+                            Box::new(error),
+                        )
+                    })
+                },
+            )
+            .optional()
+            .context("failed to load rate limit count")?
+            .map_or(Ok(0), Ok)
+    }
+
+    pub fn increment_rate_limit_counter(&self, key: &str, bucket: i64) -> Result<u64> {
+        self.with_immediate_transaction(|connection| {
+            connection
+                .execute(
+                    "INSERT INTO rate_limits (key, bucket, count)
+                     VALUES (?1, ?2, 1)
+                     ON CONFLICT(key, bucket)
+                     DO UPDATE SET count = count + 1",
+                    params![key, bucket],
+                )
+                .context("failed to increment rate limit bucket")?;
+
+            let count: i64 = connection
+                .query_row(
+                    "SELECT count
+                     FROM rate_limits
+                     WHERE key = ?1 AND bucket = ?2",
+                    params![key, bucket],
+                    |row| row.get(0),
+                )
+                .context("failed to read incremented rate limit bucket")?;
+
+            u64::try_from(count).context("rate limit count exceeds supported range")
+        })
+    }
+
+    pub fn delete_rate_limit_buckets_before(&self, cutoff_bucket: i64) -> Result<usize> {
+        let connection = self.database.open_connection()?;
+        connection
+            .execute(
+                "DELETE FROM rate_limits
+                 WHERE bucket < ?1",
+                [cutoff_bucket],
+            )
+            .context("failed to purge old rate limit buckets")
+    }
+
     // v1 strategy: consume a secret by deleting it immediately in the same
     // transaction that reads it, rather than marking `consumed_at` first.
     pub fn consume_unexpired_secret_by_id(
@@ -646,6 +707,91 @@ mod tests {
                 active_secret_count: 1,
                 active_storage_bytes: active_secret.size_bytes,
             }
+        );
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
+    fn rate_limit_count_defaults_to_zero_for_missing_bucket() {
+        let (temp_root, store) = setup_secret_store("rate-limit-missing");
+
+        let count = store
+            .rate_limit_count("create:ip-hash", 1_700_000_000)
+            .expect("missing rate limit count should load");
+
+        assert_eq!(count, 0);
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
+    fn increment_rate_limit_counter_accumulates_per_key_and_bucket() {
+        let (temp_root, store) = setup_secret_store("rate-limit-increment");
+
+        let first = store
+            .increment_rate_limit_counter("create-minute:ip-hash", 1_700_000_020)
+            .expect("first increment should succeed");
+        let second = store
+            .increment_rate_limit_counter("create-minute:ip-hash", 1_700_000_020)
+            .expect("second increment should succeed");
+        let other_bucket = store
+            .increment_rate_limit_counter("create-minute:ip-hash", 1_700_000_080)
+            .expect("other bucket increment should succeed");
+        let other_key = store
+            .increment_rate_limit_counter("read-minute:ip-hash", 1_700_000_020)
+            .expect("other key increment should succeed");
+
+        assert_eq!(first, 1);
+        assert_eq!(second, 2);
+        assert_eq!(other_bucket, 1);
+        assert_eq!(other_key, 1);
+        assert_eq!(
+            store
+                .rate_limit_count("create-minute:ip-hash", 1_700_000_020)
+                .expect("stored bucket should load"),
+            2
+        );
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
+    fn delete_rate_limit_buckets_before_removes_only_older_buckets() {
+        let (temp_root, store) = setup_secret_store("rate-limit-purge");
+
+        store
+            .increment_rate_limit_counter("create-minute:ip-hash", 10)
+            .expect("old bucket insert should succeed");
+        store
+            .increment_rate_limit_counter("create-minute:ip-hash", 20)
+            .expect("new bucket insert should succeed");
+        store
+            .increment_rate_limit_counter("read-minute:ip-hash", 5)
+            .expect("other old bucket insert should succeed");
+
+        let deleted = store
+            .delete_rate_limit_buckets_before(20)
+            .expect("bucket purge should succeed");
+
+        assert_eq!(deleted, 2);
+        assert_eq!(
+            store
+                .rate_limit_count("create-minute:ip-hash", 10)
+                .expect("old bucket should load"),
+            0
+        );
+        assert_eq!(
+            store
+                .rate_limit_count("read-minute:ip-hash", 5)
+                .expect("other old bucket should load"),
+            0
+        );
+        assert_eq!(
+            store
+                .rate_limit_count("create-minute:ip-hash", 20)
+                .expect("new bucket should remain"),
+            1
         );
 
         cleanup_temp_dir(&temp_root);
