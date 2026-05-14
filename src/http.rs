@@ -705,7 +705,7 @@ mod tests {
         assert!(
             html.contains("nothing can be recovered after read, expiration, or early deletion")
         );
-        assert!(html.contains("The recipient can read the secret only once"));
+        assert!(html.contains("The recipient must receive the full link, including the fragment."));
     }
 
     #[tokio::test]
