@@ -90,6 +90,13 @@ impl ApiError {
         }
     }
 
+    fn too_many_requests(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: message.into(),
+        }
+    }
+
     fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -174,10 +181,13 @@ async fn create_secret_stub(
     let now_timestamp = current_timestamp()?;
     let validated = validate_create_request(&state.config, &payload)?;
     let client_ip = client_ip.map(|Extension(client_ip)| client_ip);
+    let requester_ip_hash = client_ip
+        .as_ref()
+        .map(|client_ip| client_ip.hashed_identifier(&state.config.ip_hash_salt));
 
     ensure_create_enabled(&state.config)?;
     enforce_global_create_quotas(&state, now_timestamp, validated.ciphertext_size_bytes)?;
-    check_create_rate_limit_hook(&state)?;
+    check_create_rate_limit_hook(&state, requester_ip_hash.as_deref(), now_timestamp)?;
     verify_turnstile(&state, client_ip.map(|client_ip| client_ip.0), &payload).await?;
 
     let generated = generate_secret_reference();
@@ -196,8 +206,7 @@ async fn create_secret_stub(
         expires_at,
         delete_token_hash: generated.delete_token_hash,
         size_bytes: validated.ciphertext_size_bytes,
-        requester_ip_hash: client_ip
-            .map(|client_ip| client_ip.hashed_identifier(&state.config.ip_hash_salt)),
+        requester_ip_hash,
     };
 
     state
@@ -524,8 +533,28 @@ fn enforce_global_create_quotas(
     Ok(())
 }
 
-// Step 7 hook: rate limiting will be wired here without reshaping the handler.
-fn check_create_rate_limit_hook(_state: &AppState) -> Result<(), ApiError> {
+fn check_create_rate_limit_hook(
+    state: &AppState,
+    requester_ip_hash: Option<&str>,
+    now_timestamp: i64,
+) -> Result<(), ApiError> {
+    let Some(requester_ip_hash) = requester_ip_hash else {
+        return Ok(());
+    };
+
+    let minute_bucket = now_timestamp.div_euclid(60);
+    let minute_key = format!("create-minute:{requester_ip_hash}");
+    let minute_count = state
+        .secret_store
+        .increment_rate_limit_counter(&minute_key, minute_bucket)
+        .map_err(|error| ApiError::internal(format!("failed to update create rate limit: {error}")))?;
+
+    if minute_count > state.config.create_rate_limit_per_minute {
+        return Err(ApiError::too_many_requests(
+            "create rate limit exceeded for the current minute",
+        ));
+    }
+
     Ok(())
 }
 
@@ -1020,6 +1049,36 @@ mod tests {
             .expect("router should respond");
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn create_route_rejects_when_minute_rate_limit_is_exceeded() {
+        let verifier = start_turnstile_test_server(TurnstileScenario::Success).await;
+        let mut config = AppConfig::default();
+        config.turnstile_verify_url = verifier.url.clone();
+        config.create_rate_limit_per_minute = 1;
+        let (_guard, app, _database) = test_router("create-minute-rate-limit", config);
+
+        for expected_status in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/api/create")
+                        .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 12345))))
+                        .header("cf-connecting-ip", "203.0.113.10")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"valid-turnstile-token"}"#,
+                        ))
+                        .expect("request should build"),
+                )
+                .await
+                .expect("router should respond");
+
+            assert_eq!(response.status(), expected_status);
+        }
     }
 
     #[tokio::test]
