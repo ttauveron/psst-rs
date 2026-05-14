@@ -126,6 +126,26 @@ ok
    cargo run
    ```
 
+### Turnstile en local
+
+Si ton widget Turnstile echoue sur `http://127.0.0.1:3000` ou `http://localhost:3000`, la cause la plus probable est que ta cle Cloudflare de production n'autorise pas les domaines locaux.
+
+Deux options simples :
+
+1. utiliser les cles de test Cloudflare en local :
+
+   ```bash
+   SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db \
+   SECRET_RS_PUBLIC_BASE_URL=http://127.0.0.1:3000 \
+   SECRET_RS_TURNSTILE_SITE_KEY=1x00000000000000000000AA \
+   SECRET_RS_TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA \
+   cargo run
+   ```
+
+2. ou autoriser `localhost` et `127.0.0.1` dans la configuration Hostname Management de ton widget Turnstile.
+
+Les cles de test Cloudflare fonctionnent sur les domaines locaux et renvoient toujours une validation reussie pour ce couple de test. Source : Cloudflare Turnstile testing docs (`https://developers.cloudflare.com/turnstile/troubleshooting/testing/`).
+
 7. Ouvre le lien complet dans un autre onglet ou une autre fenetre.
 
 8. Verifie que le secret s'affiche correctement.
