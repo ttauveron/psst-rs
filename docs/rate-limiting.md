@@ -1,69 +1,69 @@
 # Rate Limiting
 
-## Resume
+## Summary
 
-`psst-rs` applique un rate limiting applicatif en plus de Cloudflare Turnstile.
+`psst-rs` applies application-side rate limiting in addition to Cloudflare Turnstile.
 
-Limites actuelles par IP hashée :
+Current limits per hashed IP:
 
-- creation : `5` par minute ;
-- creation : `30` par heure ;
-- lecture : `60` par minute.
+- creation: `5` per minute;
+- creation: `30` per hour;
+- read: `60` per minute.
 
-Ces valeurs sont configurables par variables d'environnement.
+These values are configurable through environment variables.
 
-## Variables de configuration
+## Configuration Variables
 
 - `SECRET_RS_IP_HASH_SALT`
-  Sel serveur obligatoire utilise pour pseudonymiser l'IP cliente avant stockage ou comptage.
+  Required server-side salt used to pseudonymize the client IP before storing or counting it.
 
 - `SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE`
-  Limite de creation par minute. Defaut : `5`.
+  Creation limit per minute. Default: `5`.
 
 - `SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR`
-  Limite de creation par heure. Defaut : `30`.
+  Creation limit per hour. Default: `30`.
 
 - `SECRET_RS_READ_RATE_LIMIT_PER_MINUTE`
-  Limite souple de lecture par minute. Defaut : `60`.
+  Soft read limit per minute. Default: `60`.
 
-## Cle de comptage
+## Counting Key
 
-Le comptage ne stocke jamais l'IP brute.
+Rate limiting never stores the raw IP.
 
-Le serveur :
+The server:
 
-- extrait l'IP cliente via les proxies de confiance ;
-- calcule un identifiant pseudonymise a partir de l'IP et de `SECRET_RS_IP_HASH_SALT` ;
-- utilise cet identifiant comme cle logique pour les buckets de rate limit.
+- extracts the client IP through trusted proxies;
+- computes a pseudonymized identifier from the IP and `SECRET_RS_IP_HASH_SALT`;
+- uses that identifier as the logical key for rate-limit buckets.
 
-Les secrets eux-memes conservent aussi `requester_ip_hash` en base pour les usages anti-abus futurs.
+Secrets themselves also keep `requester_ip_hash` in the database for future abuse-mitigation use cases.
 
-## Buckets stockes
+## Stored Buckets
 
-Les compteurs sont persistés dans SQLite, dans la table `rate_limits`.
+Counters are persisted in SQLite in the `rate_limits` table.
 
-Buckets actuels :
+Current buckets:
 
 - `create-minute:<ip-hash>`
 - `create-hour:<ip-hash>`
 - `read-minute:<ip-hash>`
 
-Le comptage est donc persistant entre redemarrages du service.
+Counting is therefore persistent across service restarts.
 
-## Reponses HTTP
+## HTTP Responses
 
 - `429 Too Many Requests`
-  Retourne quand une limite IP est depassee.
+  Returned when an IP-based limit is exceeded.
 
 - `503 Service Unavailable`
-  Retourne pour les indisponibilites globales, par exemple :
-  - creation desactivee ;
-  - quota global de secrets actifs depasse ;
-  - quota global de stockage depasse ;
-  - indisponibilite du service de verification Turnstile.
+  Returned for global unavailability, for example:
+  - creation disabled;
+  - active secret global quota exceeded;
+  - global storage quota exceeded;
+  - Turnstile verification service unavailable.
 
-## Notes d'implementation
+## Implementation Notes
 
-- Les tentatives de creation sont comptees avant la verification Turnstile finale. Des soumissions invalides ou abusives consomment donc aussi le budget de creation.
-- Si aucune IP cliente exploitable n'est disponible dans la requete, les limites IP ne s'appliquent pas.
-- La purge automatique des vieux buckets n'est pas encore documentee comme completement finalisee ; les primitives SQLite existent deja pour preparer cette etape.
+- Creation attempts are counted before final Turnstile verification. Invalid or abusive submissions therefore also consume the creation budget.
+- If no usable client IP is available in the request, IP-based limits do not apply.
+- Automatic cleanup of old buckets is not yet documented as fully finalized; the SQLite primitives already exist to support that step.
