@@ -3,7 +3,7 @@ use std::time::Instant;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, MatchedPath, Request},
+    extract::{ConnectInfo, DefaultBodyLimit, MatchedPath, Request, State},
     http::{
         HeaderValue, Response, StatusCode,
         header::{CONTENT_SECURITY_POLICY, HeaderName, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS},
@@ -47,6 +47,9 @@ struct CreateSecretRequest {
 pub fn build_router(config: AppConfig) -> Router {
     let max_json_body_bytes =
         usize::try_from(config.max_ciphertext_bytes.saturating_add(4096)).unwrap_or(usize::MAX);
+    let app_state = AppState {
+        config: config.clone(),
+    };
 
     Router::new()
         .route("/", get(index))
@@ -54,10 +57,10 @@ pub fn build_router(config: AppConfig) -> Router {
         .route("/abuse", get(abuse))
         .route("/healthz", get(healthz))
         .route("/api/create", post(create_secret_stub))
-        .with_state(AppState { config })
+        .with_state(app_state)
         .layer(DefaultBodyLimit::max(max_json_body_bytes))
         .layer(middleware::from_fn(log_request))
-        .layer(middleware::from_fn(extract_client_ip))
+        .layer(middleware::from_fn_with_state(config, extract_client_ip))
         .layer(middleware::from_fn(apply_security_headers))
 }
 
@@ -156,9 +159,18 @@ async fn apply_security_headers(request: Request, next: Next) -> Response<Body> 
     response
 }
 
-async fn extract_client_ip(mut request: Request, next: Next) -> Response<Body> {
-    if let Some(ip) = ClientIp::from_headers(request.headers()) {
-        request.extensions_mut().insert(ip);
+async fn extract_client_ip(
+    State(config): State<AppConfig>,
+    mut request: Request,
+    next: Next,
+) -> Response<Body> {
+    if let Some(ConnectInfo(peer_addr)) = request
+        .extensions()
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+    {
+        let client_ip =
+            ClientIp::from_request(peer_addr.ip(), request.headers(), &config.trusted_proxy_ips);
+        request.extensions_mut().insert(client_ip);
     }
 
     next.run(request).await
@@ -191,7 +203,7 @@ fn matched_path_or_uri(request: &Request) -> &str {
         .extensions()
         .get::<MatchedPath>()
         .map(MatchedPath::as_str)
-        .unwrap_or_else(|| request.uri().path())
+        .unwrap_or("unmatched")
 }
 
 #[cfg(test)]
@@ -202,7 +214,7 @@ mod tests {
     };
     use tower::util::ServiceExt;
 
-    use super::build_router;
+    use super::{build_router, matched_path_or_uri};
     use crate::config::AppConfig;
 
     #[tokio::test]
@@ -272,6 +284,16 @@ mod tests {
             .expect("router should respond");
 
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[test]
+    fn unmatched_requests_do_not_log_raw_uri_paths() {
+        let request = Request::builder()
+            .uri("/s/some-secret-id")
+            .body(Body::empty())
+            .expect("request should build");
+
+        assert_eq!(matched_path_or_uri(&request), "unmatched");
     }
 
     fn header_value(value: &'static str) -> header::HeaderValue {

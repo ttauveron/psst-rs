@@ -22,16 +22,24 @@ async fn main() -> Result<()> {
         "starting secret-rs"
     );
 
-    axum::serve(listener, build_router(config.clone())).await?;
+    axum::serve(
+        listener,
+        build_router(config.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
 fn init_tracing() {
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("secret_rs=info,info"));
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(default_log_filter()));
 
     tracing_subscriber::registry()
         .with(env_filter)
         .with(fmt::layer().compact().with_target(false))
         .init();
+}
+
+fn default_log_filter() -> &'static str {
+    "secret_rs=info,warn"
 }

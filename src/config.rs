@@ -1,4 +1,9 @@
-use std::{env, net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{
+    env,
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    str::FromStr,
+};
 
 use anyhow::{Context, Result, bail};
 
@@ -10,6 +15,7 @@ const DEFAULT_MAX_CIPHERTEXT_BYTES: u64 = 32 * 1024;
 const DEFAULT_DEFAULT_TTL_SECONDS: u64 = 24 * 60 * 60;
 const DEFAULT_MAX_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_ENABLE_CREATE: bool = true;
+const DEFAULT_TRUSTED_PROXY_IPS: &str = "127.0.0.1,::1";
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -21,6 +27,7 @@ pub struct AppConfig {
     pub default_ttl_seconds: u64,
     pub max_ttl_seconds: u64,
     pub enable_create: bool,
+    pub trusted_proxy_ips: Vec<IpAddr>,
 }
 
 impl AppConfig {
@@ -48,6 +55,10 @@ impl AppConfig {
             enable_create: env_or_parse(
                 "SECRET_RS_ENABLE_CREATE",
                 if DEFAULT_ENABLE_CREATE { "true" } else { "false" },
+            )?,
+            trusted_proxy_ips: env_or_ip_list(
+                "SECRET_RS_TRUSTED_PROXY_IPS",
+                DEFAULT_TRUSTED_PROXY_IPS,
             )?,
         };
 
@@ -84,6 +95,10 @@ impl AppConfig {
             bail!("SECRET_RS_MAX_TTL_SECONDS must be >= SECRET_RS_DEFAULT_TTL_SECONDS");
         }
 
+        if self.trusted_proxy_ips.is_empty() {
+            bail!("SECRET_RS_TRUSTED_PROXY_IPS must not be empty");
+        }
+
         Ok(())
     }
 }
@@ -99,6 +114,14 @@ impl Default for AppConfig {
             default_ttl_seconds: DEFAULT_DEFAULT_TTL_SECONDS,
             max_ttl_seconds: DEFAULT_MAX_TTL_SECONDS,
             enable_create: DEFAULT_ENABLE_CREATE,
+            trusted_proxy_ips: vec![
+                "127.0.0.1"
+                    .parse()
+                    .expect("default trusted proxy ip should parse"),
+                "::1"
+                    .parse()
+                    .expect("default trusted proxy ip should parse"),
+            ],
         }
     }
 }
@@ -121,6 +144,26 @@ where
         .with_context(|| format!("invalid value for {key}: {raw}"))
 }
 
+fn env_or_ip_list(key: &str, default: &str) -> Result<Vec<IpAddr>> {
+    let raw = env_or_string(key, default);
+    let mut ips = Vec::new();
+
+    for value in raw.split(',') {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+
+        ips.push(
+            value
+                .parse::<IpAddr>()
+                .with_context(|| format!("invalid IP address in {key}: {value}"))?,
+        );
+    }
+
+    Ok(ips)
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -134,6 +177,7 @@ mod tests {
         assert_eq!(config.bind_addr.to_string(), "127.0.0.1:3000");
         assert_eq!(config.max_secret_bytes, 16 * 1024);
         assert!(config.enable_create);
+        assert_eq!(config.trusted_proxy_ips.len(), 2);
     }
 
     #[test]
@@ -147,6 +191,20 @@ mod tests {
             error
                 .to_string()
                 .contains("SECRET_RS_BIND_ADDR must bind to a loopback address")
+        );
+    }
+
+    #[test]
+    fn rejects_empty_trusted_proxy_list() {
+        let mut config = AppConfig::default();
+        config.trusted_proxy_ips.clear();
+
+        let error = config.validate().expect_err("config should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("SECRET_RS_TRUSTED_PROXY_IPS must not be empty")
         );
     }
 }
