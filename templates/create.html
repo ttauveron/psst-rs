@@ -4,9 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>psst</title>
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" defer></script>
-    <link rel="stylesheet" href="/static/app.css">
-    <script src="/static/app.js" defer></script>
+    <link rel="stylesheet" href="{{APP_CSS_URL}}">
+    <script src="{{APP_JS_URL}}" defer></script>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onPsstTurnstileLoad" defer></script>
   </head>
   <body>
     <main
@@ -44,11 +44,12 @@
             </div>
           </div>
 
-          <div class="actions">
-            <button id="create-button" type="submit">Create psst link</button>
-          </div>
-          <div class="turnstile-shell">
-            <div id="turnstile-widget" aria-live="polite"></div>
+          <div class="create-actions">
+            <button id="create-button" type="submit" disabled>Create psst link</button>
+            <div class="turnstile-shell">
+              <div id="turnstile-widget" aria-live="polite"></div>
+              <input id="turnstile-token" type="hidden" name="cf-turnstile-response" value="">
+            </div>
           </div>
         </form>
 

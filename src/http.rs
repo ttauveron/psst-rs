@@ -26,6 +26,7 @@ use hyper_util::{
     client::legacy::{Client, connect::HttpConnector},
     rt::TokioExecutor,
 };
+use sha2::{Digest, Sha256};
 use tracing::info;
 
 use crate::{
@@ -41,6 +42,8 @@ use crate::{
 
 static HEADER_PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
 type TurnstileHttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>;
+const APP_CSS: &str = include_str!("../static/app.css");
+const APP_JS: &str = include_str!("../static/app.js");
 
 const HTML_CSP: &str = concat!(
     "default-src 'self'; ",
@@ -143,16 +146,13 @@ async fn healthz() -> &'static str {
 }
 
 async fn static_app_css() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-        include_str!("../static/app.css"),
-    )
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], APP_CSS)
 }
 
 async fn static_app_js() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("../static/app.js"),
+        APP_JS,
     )
 }
 
@@ -263,6 +263,9 @@ async fn delete_secret(
 
 fn render_index_page(config: &AppConfig) -> String {
     let mut ttl_options = String::new();
+    let asset_version = asset_version();
+    let app_css_url = format!("/static/app.css?v={asset_version}");
+    let app_js_url = format!("/static/app.js?v={asset_version}");
 
     for ttl_seconds in ALLOWED_TTL_SECONDS {
         let selected = if ttl_seconds == config.default_ttl_seconds {
@@ -281,6 +284,8 @@ fn render_index_page(config: &AppConfig) -> String {
     render_template(
         include_str!("../templates/create.html"),
         &[
+            ("{{APP_CSS_URL}}", &app_css_url),
+            ("{{APP_JS_URL}}", &app_js_url),
             (
                 "{{PUBLIC_BASE_URL}}",
                 &escape_html_attribute(&config.public_base_url),
@@ -304,10 +309,27 @@ fn render_index_page(config: &AppConfig) -> String {
 }
 
 fn render_read_page(secret_id: &str) -> String {
+    let asset_version = asset_version();
+    let app_css_url = format!("/static/app.css?v={asset_version}");
+    let app_js_url = format!("/static/app.js?v={asset_version}");
+
     render_template(
         include_str!("../templates/read.html"),
-        &[("{{SECRET_ID}}", &escape_html_attribute(secret_id))],
+        &[
+            ("{{APP_CSS_URL}}", &app_css_url),
+            ("{{APP_JS_URL}}", &app_js_url),
+            ("{{SECRET_ID}}", &escape_html_attribute(secret_id)),
+        ],
     )
+}
+
+fn asset_version() -> String {
+    let mut digest = Sha256::new();
+    digest.update(APP_CSS.as_bytes());
+    digest.update(APP_JS.as_bytes());
+    let hash = digest.finalize();
+
+    hash[..6].iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn ttl_label(ttl_seconds: u64) -> &'static str {
@@ -672,8 +694,8 @@ mod tests {
         assert!(html.contains(r#"data-max-secret-bytes="16384""#));
         assert!(html.contains(r#"data-turnstile-site-key="test-turnstile-site-key""#));
         assert!(html.contains("challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"));
-        assert!(html.contains(r#"src="/static/app.js""#));
-        assert!(html.contains(r#"href="/static/app.css""#));
+        assert!(html.contains(r#"src="/static/app.js?v="#));
+        assert!(html.contains(r#"href="/static/app.css?v="#));
         assert!(html.contains("Share a secret."));
         assert!(html.contains(
             "<strong>psst</strong> creates one-time secret links with client-side encryption."
@@ -711,7 +733,7 @@ mod tests {
         assert!(html.contains(r#"data-secret-id="test-secret-id""#));
         assert!(html.contains("Click to decrypt the secret"));
         assert!(html.contains(r#"id="decrypt-secret-button""#));
-        assert!(html.contains(r#"src="/static/app.js""#));
+        assert!(html.contains(r#"src="/static/app.js?v="#));
         assert!(
             html.contains(
                 "<strong>psst</strong> cannot help if the fragment key is missing or wrong"
