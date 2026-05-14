@@ -555,7 +555,9 @@ fn check_create_rate_limit_hook(
     let minute_count = state
         .secret_store
         .increment_rate_limit_counter(&minute_key, minute_bucket)
-        .map_err(|error| ApiError::internal(format!("failed to update create rate limit: {error}")))?;
+        .map_err(|error| {
+            ApiError::internal(format!("failed to update create rate limit: {error}"))
+        })?;
 
     if minute_count > state.config.create_rate_limit_per_minute {
         return Err(ApiError::too_many_requests());
@@ -567,7 +569,9 @@ fn check_create_rate_limit_hook(
     let hour_count = state
         .secret_store
         .increment_rate_limit_counter(&hour_key, hour_bucket)
-        .map_err(|error| ApiError::internal(format!("failed to update create rate limit: {error}")))?;
+        .map_err(|error| {
+            ApiError::internal(format!("failed to update create rate limit: {error}"))
+        })?;
 
     if hour_count > state.config.create_rate_limit_per_hour {
         return Err(ApiError::too_many_requests());
@@ -591,7 +595,9 @@ fn check_read_rate_limit(
     let minute_count = state
         .secret_store
         .increment_rate_limit_counter(&minute_key, minute_bucket)
-        .map_err(|error| ApiError::internal(format!("failed to update read rate limit: {error}")))?;
+        .map_err(|error| {
+            ApiError::internal(format!("failed to update read rate limit: {error}"))
+        })?;
 
     if minute_count > state.config.read_rate_limit_per_minute {
         return Err(ApiError::too_many_requests());
@@ -1370,7 +1376,10 @@ mod tests {
             Request::builder()
                 .method(Method::GET)
                 .uri(format!("/api/secrets/{secret_id}"))
-                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 12345))))
+                .extension(ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    12345,
+                ))))
                 .header("cf-connecting-ip", "203.0.113.10")
                 .body(Body::empty())
                 .expect("request should build")
@@ -1396,10 +1405,18 @@ mod tests {
         config.read_rate_limit_per_minute = 1;
         let (_guard, app, database) = test_router("read-no-client-ip", config);
         let now_timestamp = current_timestamp().expect("current timestamp should exist");
-        let first_secret =
-            insert_test_secret(&database, "ciphertext-three", "nonce-three", now_timestamp + 60);
-        let second_secret =
-            insert_test_secret(&database, "ciphertext-four", "nonce-four", now_timestamp + 60);
+        let first_secret = insert_test_secret(
+            &database,
+            "ciphertext-three",
+            "nonce-three",
+            now_timestamp + 60,
+        );
+        let second_secret = insert_test_secret(
+            &database,
+            "ciphertext-four",
+            "nonce-four",
+            now_timestamp + 60,
+        );
 
         for secret_id in [&first_secret.secret_id, &second_secret.secret_id] {
             let response = app
@@ -1440,6 +1457,19 @@ mod tests {
             .expect("router should respond");
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let connection = database
+            .open_connection()
+            .expect("database connection should open");
+        let remaining: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM secrets WHERE id = ?1",
+                [generated.secret_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("count query should succeed");
+
+        assert_eq!(remaining, 1);
     }
 
     #[tokio::test]

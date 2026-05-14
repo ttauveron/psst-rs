@@ -48,6 +48,7 @@ psst_default_ttl_seconds: 86400
 psst_max_ttl_seconds: 2592000
 psst_global_max_active_secrets: 10000
 psst_global_max_storage_bytes: 52428800
+psst_maintenance_interval_seconds: 300
 psst_trusted_proxy_ips:
   - "127.0.0.1"
   - "::1"
