@@ -407,7 +407,7 @@ Un job périodique interne doit supprimer :
 
 Fréquence recommandée : toutes les 5 minutes.
 
-Au démarrage, exécuter une purge initiale.
+Un redémarrage du service ne doit pas invalider les secrets encore valides. L’expiration doit être appliquée au moment de la lecture, puis la suppression physique peut être faite par le job périodique.
 
 ## 14. Configuration
 
