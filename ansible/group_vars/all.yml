@@ -53,3 +53,8 @@ psst_maintenance_interval_seconds: 300
 psst_trusted_proxy_ips:
   - "127.0.0.1"
   - "::1"
+
+psst_ip_hash_salt: "{{ lookup('env', 'PSST_IP_HASH_SALT') | default('', true) }}"
+psst_create_rate_limit_per_minute: 5
+psst_create_rate_limit_per_hour: 30
+psst_read_rate_limit_per_minute: 60
