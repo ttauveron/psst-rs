@@ -105,7 +105,6 @@ pub fn build_router(config: AppConfig, database: Database) -> Router {
 
     Router::new()
         .route("/", get(index))
-        .route("/about", get(about))
         .route("/s/{id}", get(read_secret_page))
         .route("/healthz", get(healthz))
         .route("/static/app.css", get(static_app_css))
@@ -122,10 +121,6 @@ pub fn build_router(config: AppConfig, database: Database) -> Router {
 
 async fn index(State(state): State<AppState>) -> Html<String> {
     Html(render_index_page(&state.config))
-}
-
-async fn about() -> Html<String> {
-    Html(render_about_page())
 }
 
 async fn read_secret_page(Path(secret_id): Path<String>) -> Html<String> {
@@ -240,7 +235,6 @@ async fn delete_secret(
 }
 
 fn render_index_page(config: &AppConfig) -> String {
-    let public_base_url = escape_html_attribute(&config.public_base_url);
     let mut ttl_options = String::new();
 
     for ttl_seconds in ALLOWED_TTL_SECONDS {
@@ -257,144 +251,21 @@ fn render_index_page(config: &AppConfig) -> String {
         );
     }
 
-    format!(
-        r#"<!doctype html>
-<html lang="fr">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>secret-rs</title>
-    <link rel="stylesheet" href="/static/app.css">
-    <script src="/static/app.js" defer></script>
-  </head>
-  <body>
-    <main class="layout" id="create-app" data-public-base-url="{public_base_url}" data-max-secret-bytes="{max_secret_bytes}" data-enable-create="{enable_create}">
-      <header class="hero">
-        <p class="eyebrow">secret-rs</p>
-        <h1>Share a secret without sending the key to the server.</h1>
-        <p class="lede">The secret is encrypted in the browser, read once, then deleted. Recovery is impossible after read or expiration.</p>
-      </header>
-
-      <section class="panel">
-        <form id="create-form" novalidate>
-          <label class="field">
-            <span>Secret</span>
-            <textarea id="secret-input" name="secret" rows="10" placeholder="Paste the password, recovery phrase, or confidential note."></textarea>
-          </label>
-
-          <div class="row">
-            <label class="field compact">
-              <span>Expiration</span>
-              <select id="ttl-select" name="expires_in_seconds">{ttl_options}</select>
-            </label>
-            <div class="field compact">
-              <span>Size</span>
-              <p class="metric"><strong id="secret-size">0</strong> / {max_secret_bytes} UTF-8 bytes</p>
-            </div>
-          </div>
-
-          <div class="actions">
-            <button id="create-button" type="submit">Encrypt and create link</button>
-          </div>
-        </form>
-
-        <p class="hint">Limit: {max_secret_bytes} UTF-8 bytes before encryption. The key stays in the <code>#...</code> fragment.</p>
-        <p class="hint">The recipient can read the secret only once. If the link is lost, nothing can be recovered server-side.</p>
-        <p class="status" id="create-status" role="status" aria-live="polite"></p>
-      </section>
-
-      <section class="panel" id="create-result" hidden>
-        <h2>Share link</h2>
-        <p>The recipient must receive the full link, including the fragment.</p>
-        <label class="field">
-          <span>Link</span>
-          <input id="share-link" type="text" readonly>
-        </label>
-        <div class="actions">
-          <button id="copy-link-button" type="button">Copy</button>
-          <button id="delete-secret-button" type="button" class="button-secondary">Delete now</button>
-        </div>
-        <p class="hint">Early deletion destroys the secret before its first read.</p>
-        <p class="status" id="copy-status" role="status" aria-live="polite"></p>
-        <p class="status" id="delete-status" role="status" aria-live="polite"></p>
-      </section>
-
-      <footer class="footer">
-        <a href="/about">About</a>
-      </footer>
-    </main>
-  </body>
-</html>"#,
-        max_secret_bytes = config.max_secret_bytes,
-        enable_create = config.enable_create,
+    render_template(
+        include_str!("../templates/create.html"),
+        &[
+            ("{{PUBLIC_BASE_URL}}", &escape_html_attribute(&config.public_base_url)),
+            ("{{MAX_SECRET_BYTES}}", &config.max_secret_bytes.to_string()),
+            ("{{ENABLE_CREATE}}", if config.enable_create { "true" } else { "false" }),
+            ("{{TTL_OPTIONS}}", &ttl_options),
+        ],
     )
 }
 
-fn render_about_page() -> String {
-    r#"<!doctype html>
-<html lang="fr">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>About</title>
-    <link rel="stylesheet" href="/static/app.css">
-  </head>
-  <body>
-    <main class="layout prose">
-      <header class="hero">
-        <p class="eyebrow">About</p>
-        <h1>The server never sees the key.</h1>
-      </header>
-
-      <section class="panel">
-        <p>The browser generates an AES-GCM key, encrypts the secret locally, then sends only the ciphertext and nonce to the server.</p>
-        <p>The final link contains the key only in the URL fragment after <code>#</code>. The fragment is not sent to the server in HTTP requests.</p>
-        <p>When a secret is read successfully, the server deletes it immediately. There is no recovery mechanism after read, expiration, or early deletion.</p>
-      </section>
-
-      <footer class="footer">
-        <a href="/">Back</a>
-      </footer>
-    </main>
-  </body>
-</html>"#
-        .to_owned()
-}
-
 fn render_read_page(secret_id: &str) -> String {
-    format!(
-        r#"<!doctype html>
-<html lang="fr">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Read secret</title>
-    <link rel="stylesheet" href="/static/app.css">
-    <script src="/static/app.js" defer></script>
-  </head>
-  <body>
-    <main class="layout" id="read-app" data-secret-id="{}">
-      <header class="hero">
-        <p class="eyebrow">Single read</p>
-        <h1>Decrypt the secret locally.</h1>
-        <p class="lede">The secret is retrieved once, decrypted in the browser, then removed from storage. If the fragment key is missing or wrong, the server cannot help.</p>
-      </header>
-
-      <section class="panel">
-        <p class="status" id="read-status" role="status" aria-live="polite">Click to decrypt the secret. A successful read will remove it from the server.</p>
-        <div class="actions">
-          <button id="decrypt-secret-button" type="button">Decrypt secret</button>
-        </div>
-        <pre id="secret-output" hidden></pre>
-      </section>
-
-      <footer class="footer">
-        <a href="/">Create another link</a>
-      </footer>
-    </main>
-  </body>
-</html>"#,
-        escape_html_attribute(secret_id)
+    render_template(
+        include_str!("../templates/read.html"),
+        &[("{{SECRET_ID}}", &escape_html_attribute(secret_id))],
     )
 }
 
@@ -423,6 +294,16 @@ fn escape_html_attribute(value: &str) -> String {
     }
 
     escaped
+}
+
+fn render_template(template: &str, replacements: &[(&str, &str)]) -> String {
+    let mut rendered = template.to_owned();
+
+    for (placeholder, value) in replacements {
+        rendered = rendered.replace(placeholder, value);
+    }
+
+    rendered
 }
 
 async fn apply_security_headers(request: Request, next: Next) -> Response<Body> {
@@ -681,9 +562,11 @@ mod tests {
         assert!(html.contains(r#"data-max-secret-bytes="16384""#));
         assert!(html.contains(r#"src="/static/app.js""#));
         assert!(html.contains(r#"href="/static/app.css""#));
+        assert!(html.contains("Share safely."));
+        assert!(html.contains("Create a one-time secret link with client-side encryption."));
         assert!(html.contains("Encrypt and create link"));
         assert!(html.contains("Delete now"));
-        assert!(html.contains("Recovery is impossible after read or expiration"));
+        assert!(html.contains("nothing can be recovered after read, expiration, or early deletion"));
         assert!(html.contains("The recipient can read the secret only once"));
     }
 
@@ -713,33 +596,7 @@ mod tests {
         assert!(html.contains("Click to decrypt the secret"));
         assert!(html.contains(r#"id="decrypt-secret-button""#));
         assert!(html.contains(r#"src="/static/app.js""#));
-        assert!(html.contains("If the fragment key is missing or wrong"));
-    }
-
-    #[tokio::test]
-    async fn about_page_explains_irreversible_secret_lifecycle() {
-        let (_guard, app, _database) = test_router("about-page", AppConfig::default());
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/about")
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("router should respond");
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("body should be readable");
-        let html = String::from_utf8(body.to_vec()).expect("body should be utf-8");
-
-        assert!(html.contains("The server never sees the key"));
-        assert!(html.contains("The fragment is not sent to the server"));
-        assert!(html.contains("There is no recovery mechanism"));
+        assert!(html.contains("the server cannot help if the fragment key is missing or wrong"));
     }
 
     #[tokio::test]

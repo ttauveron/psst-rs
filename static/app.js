@@ -114,6 +114,7 @@ async function bootCreatePage(root) {
       }
       shareLink.value = shareUrl
       result.hidden = false
+      result.scrollIntoView({ behavior: "smooth", block: "nearest" })
       setText(
         "create-status",
         "Link generated. The server does not know the key, and the secret can be read only once.",

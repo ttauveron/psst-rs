@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>secret-rs</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <main
+      class="layout"
+      id="create-app"
+      data-public-base-url="{{PUBLIC_BASE_URL}}"
+      data-max-secret-bytes="{{MAX_SECRET_BYTES}}"
+      data-enable-create="{{ENABLE_CREATE}}"
+    >
+      <header class="hero hero-create">
+        <p class="eyebrow">secret-rs</p>
+        <h1>Share safely.</h1>
+        <p class="lede">Create a one-time secret link with client-side encryption. The browser generates the key, encrypts the secret locally, and sends only ciphertext and a nonce to the server. The key stays in the <code>#</code> fragment, the secret can be read once, and nothing can be recovered after read, expiration, or early deletion.</p>
+      </header>
+
+      <section class="panel">
+        <form id="create-form" novalidate>
+          <label class="field">
+            <span>Secret</span>
+            <textarea id="secret-input" name="secret" rows="10" placeholder="Paste the password, recovery phrase, or confidential note."></textarea>
+          </label>
+
+          <div class="row">
+            <label class="field compact">
+              <span>Expiration</span>
+              <select id="ttl-select" name="expires_in_seconds">{{TTL_OPTIONS}}</select>
+            </label>
+            <div class="field compact">
+              <span>Size</span>
+              <p class="metric"><strong id="secret-size">0</strong> / {{MAX_SECRET_BYTES}} UTF-8 bytes</p>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button id="create-button" type="submit">Encrypt and create link</button>
+          </div>
+        </form>
+
+        <section class="result-card" id="create-result" hidden>
+          <h2>Share link</h2>
+          <p>The recipient must receive the full link, including the fragment.</p>
+          <label class="field">
+            <span>Link</span>
+            <input id="share-link" type="text" readonly>
+          </label>
+          <div class="actions">
+            <button id="copy-link-button" type="button">Copy</button>
+            <button id="delete-secret-button" type="button" class="button-secondary">Delete now</button>
+          </div>
+          <p class="hint">Early deletion destroys the secret before its first read.</p>
+          <p class="status" id="copy-status" role="status" aria-live="polite"></p>
+          <p class="status" id="delete-status" role="status" aria-live="polite"></p>
+        </section>
+
+        <p class="hint">Limit: {{MAX_SECRET_BYTES}} UTF-8 bytes before encryption. The key stays in the <code>#...</code> fragment.</p>
+        <p class="hint">The recipient can read the secret only once. If the link is lost, nothing can be recovered server-side.</p>
+        <p class="status" id="create-status" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+  </body>
+</html>
