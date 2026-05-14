@@ -1,6 +1,8 @@
 use std::{net::IpAddr, str::FromStr};
 
 use axum::http::HeaderMap;
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientIp(pub IpAddr);
@@ -21,6 +23,25 @@ impl ClientIp {
             .map(Self)
             .unwrap_or(Self(peer_ip))
     }
+
+    pub fn hashed_identifier(&self, salt: &str) -> String {
+        let mut digest = Sha256::new();
+        digest.update(salt.as_bytes());
+        digest.update([0]);
+
+        match self.0 {
+            IpAddr::V4(ip) => {
+                digest.update([4]);
+                digest.update(ip.octets());
+            }
+            IpAddr::V6(ip) => {
+                digest.update([6]);
+                digest.update(ip.octets());
+            }
+        }
+
+        URL_SAFE_NO_PAD.encode(digest.finalize())
+    }
 }
 
 fn first_ip_from_header(headers: &HeaderMap, header_name: &str) -> Option<IpAddr> {
@@ -40,7 +61,7 @@ fn first_forwarded_for_ip(headers: &HeaderMap) -> Option<IpAddr> {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     use axum::http::{HeaderMap, HeaderValue};
 
@@ -93,5 +114,36 @@ mod tests {
         );
 
         assert_eq!(ip.0.to_string(), "198.51.100.9");
+    }
+
+    #[test]
+    fn hashed_identifier_is_stable_for_same_ip_and_salt() {
+        let ip = ClientIp("203.0.113.10".parse().expect("ip should parse"));
+
+        let first = ip.hashed_identifier("test-salt");
+        let second = ip.hashed_identifier("test-salt");
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn hashed_identifier_changes_when_salt_changes() {
+        let ip = ClientIp("203.0.113.10".parse().expect("ip should parse"));
+
+        let first = ip.hashed_identifier("salt-a");
+        let second = ip.hashed_identifier("salt-b");
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn hashed_identifier_distinguishes_ipv4_and_ipv6_inputs() {
+        let ipv4 = ClientIp(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+        let ipv6 = ClientIp(IpAddr::V6(Ipv6Addr::LOCALHOST));
+
+        assert_ne!(
+            ipv4.hashed_identifier("test-salt"),
+            ipv6.hashed_identifier("test-salt")
+        );
     }
 }
