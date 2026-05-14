@@ -10,3 +10,4 @@
 
 /terraform/cloudflare.auto.tfvars
 /.env
+.gstack/
