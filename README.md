@@ -55,7 +55,8 @@ Cette commande :
 - compile un binaire release compatible Alpine via musl ;
 - le copie vers `ansible/files/bin/psst-rs` ;
 - applique Terraform ;
-- deploie avec Ansible.
+- deploie avec Ansible ;
+- verifie en fin de playbook que `/healthz` repond a la fois via `psst-rs` en direct et via nginx.
 
 Le fichier `.env` est ignore par Git. Ne committe pas de secrets ; garde seulement `.env.example` dans le repo.
 
