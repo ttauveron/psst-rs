@@ -79,8 +79,10 @@ impl Database {
     }
 
     pub fn open_connection(&self) -> Result<Connection> {
-        let connection = Connection::open_with_flags(&self.path, self.open_flags)
-            .with_context(|| format!("failed to open SQLite database at {}", self.path.display()))?;
+        let connection =
+            Connection::open_with_flags(&self.path, self.open_flags).with_context(|| {
+                format!("failed to open SQLite database at {}", self.path.display())
+            })?;
 
         self.configure_connection(&connection)?;
         Ok(connection)
@@ -185,7 +187,8 @@ impl SecretStore {
                     secret.created_at,
                     secret.expires_at,
                     &secret.delete_token_hash,
-                    i64::try_from(secret.size_bytes).context("secret size exceeds SQLite integer range")?,
+                    i64::try_from(secret.size_bytes)
+                        .context("secret size exceeds SQLite integer range")?,
                     &secret.requester_ip_hash,
                 ],
             )
@@ -261,20 +264,24 @@ impl SecretStore {
                     let active_storage_bytes: i64 = row.get(1)?;
 
                     Ok(ActiveSecretStats {
-                        active_secret_count: u64::try_from(active_secret_count).map_err(|error| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                0,
-                                rusqlite::types::Type::Integer,
-                                Box::new(error),
-                            )
-                        })?,
-                        active_storage_bytes: u64::try_from(active_storage_bytes).map_err(|error| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                1,
-                                rusqlite::types::Type::Integer,
-                                Box::new(error),
-                            )
-                        })?,
+                        active_secret_count: u64::try_from(active_secret_count).map_err(
+                            |error| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    0,
+                                    rusqlite::types::Type::Integer,
+                                    Box::new(error),
+                                )
+                            },
+                        )?,
+                        active_storage_bytes: u64::try_from(active_storage_bytes).map_err(
+                            |error| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    1,
+                                    rusqlite::types::Type::Integer,
+                                    Box::new(error),
+                                )
+                            },
+                        )?,
                     })
                 },
             )
@@ -372,9 +379,9 @@ fn map_secret_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SecretRecord> {
 #[cfg(test)]
 mod tests {
     use std::{
+        fs,
         sync::{Arc, Barrier},
         thread,
-        fs,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -402,7 +409,12 @@ mod tests {
             .expect("query should succeed");
 
         assert_eq!(value, 1);
-        assert!(database_path.parent().expect("parent should exist").exists());
+        assert!(
+            database_path
+                .parent()
+                .expect("parent should exist")
+                .exists()
+        );
         assert_eq!(database.path(), database_path.as_path());
 
         cleanup_temp_dir(&temp_root);
@@ -612,8 +624,10 @@ mod tests {
     fn active_secret_stats_ignore_expired_secrets() {
         let (temp_root, store) = setup_secret_store("secret-store-stats");
         let now_timestamp = 1_700_000_000;
-        let active_secret = sample_secret("secret-stats-active", now_timestamp, now_timestamp + 600);
-        let expired_secret = sample_secret("secret-stats-expired", now_timestamp, now_timestamp - 1);
+        let active_secret =
+            sample_secret("secret-stats-active", now_timestamp, now_timestamp + 600);
+        let expired_secret =
+            sample_secret("secret-stats-expired", now_timestamp, now_timestamp - 1);
 
         store
             .insert_secret(&active_secret)
