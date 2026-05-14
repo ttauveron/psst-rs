@@ -1,4 +1,5 @@
 mod config;
+mod db;
 mod http;
 mod request_context;
 
@@ -6,18 +7,19 @@ use anyhow::Result;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::{config::AppConfig, http::build_router};
+use crate::{config::AppConfig, db::Database, http::build_router};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
 
     let config = AppConfig::from_env()?;
+    let database = Database::connect(&config)?;
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
 
     info!(
         bind_addr = %config.bind_addr,
-        database_path = %config.database_path.display(),
+        database_path = %database.path().display(),
         enable_create = config.enable_create,
         "starting secret-rs"
     );
