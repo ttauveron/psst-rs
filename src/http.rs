@@ -1,4 +1,7 @@
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::{
+    fmt::Write as _,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     Json, Router,
@@ -6,7 +9,10 @@ use axum::{
     extract::{ConnectInfo, DefaultBodyLimit, MatchedPath, Path, Request, State},
     http::{
         HeaderValue, Response, StatusCode,
-        header::{CONTENT_SECURITY_POLICY, HeaderName, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS},
+        header::{
+            self, CONTENT_SECURITY_POLICY, HeaderName, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS,
+            X_FRAME_OPTIONS,
+        },
     },
     middleware::{self, Next},
     response::{Html, IntoResponse},
@@ -19,8 +25,9 @@ use crate::{
     db::{ActiveSecretStats, Database, NewSecretRecord, SecretStore},
     request_context::ClientIp,
     secret::{
-        CreateSecretRequest, CreateSecretResponse, DeleteSecretRequest, DeleteSecretResponse,
-        ReadSecretResponse, generate_secret_reference, hash_delete_token, is_allowed_ttl,
+        ALLOWED_TTL_SECONDS, CreateSecretRequest, CreateSecretResponse, DeleteSecretRequest,
+        DeleteSecretResponse, ReadSecretResponse, generate_secret_reference, hash_delete_token,
+        is_allowed_ttl,
     },
 };
 
@@ -99,7 +106,10 @@ pub fn build_router(config: AppConfig, database: Database) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/about", get(about))
+        .route("/s/{id}", get(read_secret_page))
         .route("/healthz", get(healthz))
+        .route("/static/app.css", get(static_app_css))
+        .route("/static/app.js", get(static_app_js))
         .route("/api/create", post(create_secret_stub))
         .route("/api/delete/{id}", post(delete_secret))
         .route("/api/secrets/{id}", get(read_secret))
@@ -110,46 +120,34 @@ pub fn build_router(config: AppConfig, database: Database) -> Router {
         .layer(middleware::from_fn(apply_security_headers))
 }
 
-async fn index() -> Html<&'static str> {
-    Html(
-        r#"<!doctype html>
-<html lang="fr">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>secret-rs</title>
-  </head>
-  <body>
-    <main>
-      <h1>secret-rs</h1>
-      <p>Service minimaliste de partage de secrets a lecture unique.</p>
-    </main>
-  </body>
-</html>"#,
-    )
+async fn index(State(state): State<AppState>) -> Html<String> {
+    Html(render_index_page(&state.config))
 }
 
-async fn about() -> Html<&'static str> {
-    Html(
-        r#"<!doctype html>
-<html lang="fr">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>A propos</title>
-  </head>
-  <body>
-    <main>
-      <h1>A propos</h1>
-      <p>Les secrets seront chiffres dans le navigateur et lus une seule fois.</p>
-    </main>
-  </body>
-</html>"#,
-    )
+async fn about() -> Html<String> {
+    Html(render_about_page())
+}
+
+async fn read_secret_page(Path(secret_id): Path<String>) -> Html<String> {
+    Html(render_read_page(&secret_id))
 }
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+async fn static_app_css() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        include_str!("../static/app.css"),
+    )
+}
+
+async fn static_app_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../static/app.js"),
+    )
 }
 
 async fn create_secret_stub(
@@ -241,14 +239,190 @@ async fn delete_secret(
     Ok(Json(DeleteSecretResponse { deleted: true }))
 }
 
+fn render_index_page(config: &AppConfig) -> String {
+    let public_base_url = escape_html_attribute(&config.public_base_url);
+    let mut ttl_options = String::new();
+
+    for ttl_seconds in ALLOWED_TTL_SECONDS {
+        let selected = if ttl_seconds == config.default_ttl_seconds {
+            " selected"
+        } else {
+            ""
+        };
+
+        let _ = write!(
+            ttl_options,
+            r#"<option value="{ttl_seconds}"{selected}>{}</option>"#,
+            ttl_label(ttl_seconds)
+        );
+    }
+
+    format!(
+        r#"<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>secret-rs</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <main class="layout" id="create-app" data-public-base-url="{public_base_url}" data-max-secret-bytes="{max_secret_bytes}" data-enable-create="{enable_create}">
+      <header class="hero">
+        <p class="eyebrow">secret-rs</p>
+        <h1>Partager un secret sans envoyer la cle au serveur.</h1>
+        <p class="lede">Le secret est chiffre dans le navigateur, lu une seule fois, puis supprime.</p>
+      </header>
+
+      <section class="panel">
+        <form id="create-form" novalidate>
+          <label class="field">
+            <span>Secret</span>
+            <textarea id="secret-input" name="secret" rows="10" placeholder="Collez le mot de passe, la phrase de recuperation ou la note confidentielle."></textarea>
+          </label>
+
+          <div class="row">
+            <label class="field compact">
+              <span>Expiration</span>
+              <select id="ttl-select" name="expires_in_seconds">{ttl_options}</select>
+            </label>
+            <div class="field compact">
+              <span>Taille</span>
+              <p class="metric"><strong id="secret-size">0</strong> / {max_secret_bytes} octets UTF-8</p>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button id="create-button" type="submit">Chiffrer et creer le lien</button>
+          </div>
+        </form>
+
+        <p class="hint">Limite : {max_secret_bytes} octets UTF-8 avant chiffrement. La cle reste dans le fragment <code>#...</code>.</p>
+        <p class="status" id="create-status" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="panel" id="create-result" hidden>
+        <h2>Lien de partage</h2>
+        <p>Le destinataire doit recevoir le lien complet, fragment inclus.</p>
+        <label class="field">
+          <span>Lien</span>
+          <input id="share-link" type="text" readonly>
+        </label>
+        <div class="actions">
+          <button id="copy-link-button" type="button">Copier</button>
+        </div>
+        <p class="status" id="copy-status" role="status" aria-live="polite"></p>
+      </section>
+
+      <footer class="footer">
+        <a href="/about">A propos</a>
+      </footer>
+    </main>
+  </body>
+</html>"#,
+        max_secret_bytes = config.max_secret_bytes,
+        enable_create = config.enable_create,
+    )
+}
+
+fn render_about_page() -> String {
+    r#"<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>A propos</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="layout prose">
+      <header class="hero">
+        <p class="eyebrow">A propos</p>
+        <h1>Le serveur ne voit jamais la cle.</h1>
+      </header>
+
+      <section class="panel">
+        <p>Le navigateur genere une cle AES-GCM, chiffre le secret localement puis n'envoie au serveur que le ciphertext et le nonce.</p>
+        <p>Le lien final contient la cle uniquement dans le fragment d'URL, apres <code>#</code>. Le fragment n'est pas transmis au serveur lors des requetes HTTP.</p>
+        <p>Quand le secret est lu avec succes, le serveur le supprime immediatement.</p>
+      </section>
+
+      <footer class="footer">
+        <a href="/">Retour</a>
+      </footer>
+    </main>
+  </body>
+</html>"#
+        .to_owned()
+}
+
+fn render_read_page(secret_id: &str) -> String {
+    format!(
+        r#"<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lire le secret</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <main class="layout" id="read-app" data-secret-id="{}">
+      <header class="hero">
+        <p class="eyebrow">Lecture unique</p>
+        <h1>Dechiffrement local du secret.</h1>
+        <p class="lede">Le secret est recupere une fois, dechiffre dans le navigateur, puis retire du stockage.</p>
+      </header>
+
+      <section class="panel">
+        <p class="status" id="read-status" role="status" aria-live="polite">Recuperation du secret...</p>
+        <pre id="secret-output" hidden></pre>
+      </section>
+
+      <footer class="footer">
+        <a href="/">Creer un autre lien</a>
+      </footer>
+    </main>
+  </body>
+</html>"#,
+        escape_html_attribute(secret_id)
+    )
+}
+
+fn ttl_label(ttl_seconds: u64) -> &'static str {
+    match ttl_seconds {
+        ttl if ttl == 15 * 60 => "15 minutes",
+        ttl if ttl == 60 * 60 => "1 heure",
+        ttl if ttl == 24 * 60 * 60 => "24 heures",
+        ttl if ttl == 7 * 24 * 60 * 60 => "7 jours",
+        _ => "TTL non supporte",
+    }
+}
+
+fn escape_html_attribute(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '"' => escaped.push_str("&quot;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+
+    escaped
+}
+
 async fn apply_security_headers(request: Request, next: Next) -> Response<Body> {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
 
-    headers.insert(
-        CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(HTML_CSP),
-    );
+    headers.insert(CONTENT_SECURITY_POLICY, HeaderValue::from_static(HTML_CSP));
     headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
@@ -323,9 +497,10 @@ fn validate_create_request(
 
     let ciphertext_size_bytes = u64::try_from(payload.ciphertext.len())
         .map_err(|_| ApiError::bad_request("ciphertext is too large"))?;
-    if ciphertext_size_bytes > config.max_ciphertext_bytes
-    {
-        return Err(ApiError::bad_request("ciphertext exceeds the configured size limit"));
+    if ciphertext_size_bytes > config.max_ciphertext_bytes {
+        return Err(ApiError::bad_request(
+            "ciphertext exceeds the configured size limit",
+        ));
     }
 
     if payload.nonce.is_empty() {
@@ -336,15 +511,21 @@ fn validate_create_request(
         .map_err(|_| ApiError::bad_request("nonce is too large"))?
         > config.max_ciphertext_bytes
     {
-        return Err(ApiError::bad_request("nonce exceeds the configured size limit"));
+        return Err(ApiError::bad_request(
+            "nonce exceeds the configured size limit",
+        ));
     }
 
     if !is_allowed_ttl(payload.expires_in_seconds) {
-        return Err(ApiError::bad_request("expires_in_seconds is not an allowed TTL"));
+        return Err(ApiError::bad_request(
+            "expires_in_seconds is not an allowed TTL",
+        ));
     }
 
     if payload.expires_in_seconds > config.max_ttl_seconds {
-        return Err(ApiError::bad_request("expires_in_seconds exceeds the configured TTL limit"));
+        return Err(ApiError::bad_request(
+            "expires_in_seconds exceeds the configured TTL limit",
+        ));
     }
 
     Ok(ValidatedCreateRequest {
@@ -421,9 +602,7 @@ fn current_timestamp() -> Result<i64, ApiError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        time::{SystemTime, UNIX_EPOCH},
-    };
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use axum::{
         body::Body,
@@ -471,6 +650,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn index_page_exposes_browser_encryption_shell() {
+        let (_guard, app, _database) = test_router("index-page", AppConfig::default());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let html = String::from_utf8(body.to_vec()).expect("body should be utf-8");
+
+        assert!(html.contains(r#"id="create-app""#));
+        assert!(html.contains(r#"data-max-secret-bytes="16384""#));
+        assert!(html.contains(r#"src="/static/app.js""#));
+        assert!(html.contains(r#"href="/static/app.css""#));
+        assert!(html.contains("Chiffrer et creer le lien"));
+    }
+
+    #[tokio::test]
+    async fn read_page_exposes_secret_id_for_browser_decryption() {
+        let (_guard, app, _database) = test_router("read-page", AppConfig::default());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/s/test-secret-id")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let html = String::from_utf8(body.to_vec()).expect("body should be utf-8");
+
+        assert!(html.contains(r#"id="read-app""#));
+        assert!(html.contains(r#"data-secret-id="test-secret-id""#));
+        assert!(html.contains("Recuperation du secret..."));
+        assert!(html.contains(r#"src="/static/app.js""#));
+    }
+
+    #[tokio::test]
+    async fn static_assets_are_served_from_the_application() {
+        let (_guard, app, _database) = test_router("static-assets", AppConfig::default());
+
+        let css_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/static/app.css")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        let js_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/static/app.js")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(css_response.status(), StatusCode::OK);
+        assert_eq!(
+            css_response.headers().get(header::CONTENT_TYPE),
+            Some(&header_value("text/css; charset=utf-8"))
+        );
+
+        assert_eq!(js_response.status(), StatusCode::OK);
+        assert_eq!(
+            js_response.headers().get(header::CONTENT_TYPE),
+            Some(&header_value("text/javascript; charset=utf-8"))
+        );
+    }
+
+    #[tokio::test]
     async fn unsupported_method_returns_405() {
         let (_guard, app, _database) = test_router("method-405", AppConfig::default());
 
@@ -491,7 +762,10 @@ mod tests {
     #[tokio::test]
     async fn create_route_rejects_oversized_json_bodies() {
         let (_guard, app, _database) = test_router("oversized-json", AppConfig::default());
-        let oversized_body = format!(r#"{{"ciphertext":"{}","nonce":"n","expires_in_seconds":1,"turnstile_token":"t"}}"#, "a".repeat(40_000));
+        let oversized_body = format!(
+            r#"{{"ciphertext":"{}","nonce":"n","expires_in_seconds":1,"turnstile_token":"t"}}"#,
+            "a".repeat(40_000)
+        );
 
         let response = app
             .oneshot(
@@ -739,7 +1013,10 @@ mod tests {
             json.get("ciphertext").and_then(Value::as_str),
             Some("ciphertext-read")
         );
-        assert_eq!(json.get("nonce").and_then(Value::as_str), Some("nonce-read"));
+        assert_eq!(
+            json.get("nonce").and_then(Value::as_str),
+            Some("nonce-read")
+        );
 
         let connection = database
             .open_connection()
@@ -951,7 +1228,10 @@ mod tests {
         header::HeaderValue::from_static(value)
     }
 
-    fn test_router(prefix: &str, mut config: AppConfig) -> (TestTempDirGuard, axum::Router, Database) {
+    fn test_router(
+        prefix: &str,
+        mut config: AppConfig,
+    ) -> (TestTempDirGuard, axum::Router, Database) {
         let temp_root = unique_temp_dir(prefix);
         config.database_path = temp_root.join("secrets.db");
 
