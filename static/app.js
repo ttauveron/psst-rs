@@ -2,6 +2,7 @@ const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 const AES_GCM_NONCE_BYTES = 12
 const TURNSTILE_PLACEHOLDER_TOKEN = "pending-step-7"
+let latestSecretReference = null
 
 document.addEventListener("DOMContentLoaded", () => {
   const createRoot = document.getElementById("create-app")
@@ -29,6 +30,7 @@ async function bootCreatePage(root) {
   const shareLink = document.getElementById("share-link")
   const result = document.getElementById("create-result")
   const copyButton = document.getElementById("copy-link-button")
+  const deleteButton = document.getElementById("delete-secret-button")
   const maxSecretBytes = Number(root.dataset.maxSecretBytes)
   const enableCreate = root.dataset.enableCreate === "true"
 
@@ -49,6 +51,7 @@ async function bootCreatePage(root) {
     event.preventDefault()
     setText("create-status", "")
     setText("copy-status", "")
+    setText("delete-status", "")
 
     const plaintext = input.value
     const plaintextBytes = textEncoder.encode(plaintext)
@@ -105,11 +108,19 @@ async function bootCreatePage(root) {
         bytesToBase64Url(rawKey),
       )
 
+      latestSecretReference = {
+        id: payload.id,
+        deleteToken: payload.delete_token,
+      }
       shareLink.value = shareUrl
       result.hidden = false
-      setText("create-status", "Lien genere. Le serveur ne connait pas la cle.")
+      setText(
+        "create-status",
+        "Lien genere. Le serveur ne connait pas la cle, et le secret ne pourra etre lu qu'une fois.",
+      )
     } catch (error) {
-      setText("create-status", error.message || "La creation du secret a echoue.")
+      latestSecretReference = null
+      setText("create-status", mapCreateErrorMessage(error))
     } finally {
       createButton.disabled = false
       createButton.textContent = "Chiffrer et creer le lien"
@@ -127,6 +138,43 @@ async function bootCreatePage(root) {
     } catch (_error) {
       shareLink.select()
       setText("copy-status", "Copie automatique indisponible, copiez le lien manuellement.")
+    }
+  })
+
+  deleteButton.addEventListener("click", async () => {
+    if (!latestSecretReference) {
+      setText("delete-status", "Aucun secret actif a supprimer.")
+      return
+    }
+
+    deleteButton.disabled = true
+    setText("delete-status", "")
+
+    try {
+      const response = await fetch(`/api/delete/${encodeURIComponent(latestSecretReference.id)}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          delete_token: latestSecretReference.deleteToken,
+        }),
+      })
+
+      const payload = await readJson(response)
+      if (!response.ok) {
+        throw new Error(payload.error || "La suppression anticipee a echoue.")
+      }
+
+      latestSecretReference = null
+      shareLink.value = ""
+      result.hidden = true
+      setText("delete-status", "Secret supprime avant lecture.")
+      setText("create-status", "Le secret a ete detruit. Il faut creer un nouveau lien si necessaire.")
+    } catch (error) {
+      setText("delete-status", mapDeleteErrorMessage(error))
+    } finally {
+      deleteButton.disabled = false
     }
   })
 }
@@ -170,7 +218,9 @@ async function bootReadPage(root) {
     document.getElementById("secret-output").textContent = textDecoder.decode(plaintextBuffer)
     setText("read-status", "Secret dechiffre localement. Le fragment a ete efface de l'URL.")
   } catch (error) {
-    setText("read-status", error.message || "Impossible de dechiffrer ce secret.")
+    document.getElementById("secret-output").hidden = true
+    document.getElementById("secret-output").textContent = ""
+    setText("read-status", mapReadErrorMessage(error))
   }
 }
 
@@ -195,6 +245,52 @@ function setText(id, value) {
   if (node) {
     node.textContent = value
   }
+}
+
+function mapCreateErrorMessage(error) {
+  const message = error && error.message ? error.message : ""
+
+  if (message.includes("temporarily disabled")) {
+    return "La creation est temporairement desactivee."
+  }
+
+  if (message.includes("global active secret quota")) {
+    return "Le service a atteint sa limite de secrets actifs. Reessayez plus tard."
+  }
+
+  if (message.includes("global storage quota")) {
+    return "Le service a atteint sa limite de stockage. Reessayez plus tard."
+  }
+
+  if (message.includes("turnstile_token")) {
+    return "La verification anti-abus n'est pas encore active cote interface."
+  }
+
+  return message || "La creation du secret a echoue."
+}
+
+function mapReadErrorMessage(error) {
+  const message = error && error.message ? error.message : ""
+
+  if (message.includes("introuvable") || message.includes("expire") || message.includes("deja lu")) {
+    return "Secret introuvable, expire ou deja lu."
+  }
+
+  if (message.includes("decrypt") || message.includes("dechiffrer") || message.includes("OperationError")) {
+    return "Cle invalide ou donnees corrompues. Verifiez le lien complet."
+  }
+
+  return message || "Impossible de dechiffrer ce secret."
+}
+
+function mapDeleteErrorMessage(error) {
+  const message = error && error.message ? error.message : ""
+
+  if (message.includes("not found")) {
+    return "Le secret est deja indisponible."
+  }
+
+  return message || "La suppression anticipee a echoue."
 }
 
 async function readJson(response) {

@@ -149,6 +149,11 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.button-secondary {
+  background: #dde7f2;
+  color: #162033;
+}
+
 .hint,
 .status,
 .footer {

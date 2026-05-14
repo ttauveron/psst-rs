@@ -272,7 +272,7 @@ fn render_index_page(config: &AppConfig) -> String {
       <header class="hero">
         <p class="eyebrow">secret-rs</p>
         <h1>Partager un secret sans envoyer la cle au serveur.</h1>
-        <p class="lede">Le secret est chiffre dans le navigateur, lu une seule fois, puis supprime.</p>
+        <p class="lede">Le secret est chiffre dans le navigateur, lu une seule fois, puis supprime. La recuperation est impossible apres lecture ou expiration.</p>
       </header>
 
       <section class="panel">
@@ -299,6 +299,7 @@ fn render_index_page(config: &AppConfig) -> String {
         </form>
 
         <p class="hint">Limite : {max_secret_bytes} octets UTF-8 avant chiffrement. La cle reste dans le fragment <code>#...</code>.</p>
+        <p class="hint">Le destinataire ne pourra lire le secret qu'une seule fois. Si le lien est perdu, rien ne peut etre recupere cote serveur.</p>
         <p class="status" id="create-status" role="status" aria-live="polite"></p>
       </section>
 
@@ -311,8 +312,11 @@ fn render_index_page(config: &AppConfig) -> String {
         </label>
         <div class="actions">
           <button id="copy-link-button" type="button">Copier</button>
+          <button id="delete-secret-button" type="button" class="button-secondary">Supprimer maintenant</button>
         </div>
+        <p class="hint">La suppression anticipee detruit le secret avant sa premiere lecture.</p>
         <p class="status" id="copy-status" role="status" aria-live="polite"></p>
+        <p class="status" id="delete-status" role="status" aria-live="polite"></p>
       </section>
 
       <footer class="footer">
@@ -345,7 +349,7 @@ fn render_about_page() -> String {
       <section class="panel">
         <p>Le navigateur genere une cle AES-GCM, chiffre le secret localement puis n'envoie au serveur que le ciphertext et le nonce.</p>
         <p>Le lien final contient la cle uniquement dans le fragment d'URL, apres <code>#</code>. Le fragment n'est pas transmis au serveur lors des requetes HTTP.</p>
-        <p>Quand le secret est lu avec succes, le serveur le supprime immediatement.</p>
+        <p>Quand le secret est lu avec succes, le serveur le supprime immediatement. Il n'existe pas de mecanisme de recuperation apres lecture, expiration ou suppression anticipee.</p>
       </section>
 
       <footer class="footer">
@@ -373,7 +377,7 @@ fn render_read_page(secret_id: &str) -> String {
       <header class="hero">
         <p class="eyebrow">Lecture unique</p>
         <h1>Dechiffrement local du secret.</h1>
-        <p class="lede">Le secret est recupere une fois, dechiffre dans le navigateur, puis retire du stockage.</p>
+        <p class="lede">Le secret est recupere une fois, dechiffre dans le navigateur, puis retire du stockage. Si la cle du fragment manque ou est incorrecte, le serveur ne peut pas aider.</p>
       </header>
 
       <section class="panel">
@@ -675,6 +679,9 @@ mod tests {
         assert!(html.contains(r#"src="/static/app.js""#));
         assert!(html.contains(r#"href="/static/app.css""#));
         assert!(html.contains("Chiffrer et creer le lien"));
+        assert!(html.contains("Supprimer maintenant"));
+        assert!(html.contains("La recuperation est impossible apres lecture ou expiration"));
+        assert!(html.contains("Le destinataire ne pourra lire le secret qu'une seule fois"));
     }
 
     #[tokio::test]
@@ -702,6 +709,33 @@ mod tests {
         assert!(html.contains(r#"data-secret-id="test-secret-id""#));
         assert!(html.contains("Recuperation du secret..."));
         assert!(html.contains(r#"src="/static/app.js""#));
+        assert!(html.contains("Si la cle du fragment manque ou est incorrecte"));
+    }
+
+    #[tokio::test]
+    async fn about_page_explains_irreversible_secret_lifecycle() {
+        let (_guard, app, _database) = test_router("about-page", AppConfig::default());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/about")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let html = String::from_utf8(body.to_vec()).expect("body should be utf-8");
+
+        assert!(html.contains("Le serveur ne voit jamais la cle"));
+        assert!(html.contains("Le fragment n'est pas transmis au serveur"));
+        assert!(html.contains("Il n'existe pas de mecanisme de recuperation"));
     }
 
     #[tokio::test]
