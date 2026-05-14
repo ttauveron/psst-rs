@@ -1,0 +1,4 @@
+cloudflare_enabled = true
+
+cloudflare_zone_id    = "your-zone-id"
+cloudflare_hostname   = "psst.example.com"

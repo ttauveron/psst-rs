@@ -7,3 +7,5 @@
 /ansible/files/tls/*
 !/ansible/files/bin/.gitkeep
 !/ansible/files/tls/.gitkeep
+
+/terraform/cloudflare.auto.tfvars

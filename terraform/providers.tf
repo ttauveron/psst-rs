@@ -1,2 +1,5 @@
+provider "cloudflare" {
+}
+
 provider "scaleway" {
 }
