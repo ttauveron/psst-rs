@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:3000";
-const DEFAULT_DATABASE_PATH: &str = "/var/lib/secret-rs/secrets.db";
+const DEFAULT_DATABASE_PATH: &str = "/var/lib/psst-rs/secrets.db";
 const DEFAULT_PUBLIC_BASE_URL: &str = "https://example.tld";
 const DEFAULT_MAX_SECRET_BYTES: u64 = 16 * 1024;
 const DEFAULT_MAX_CIPHERTEXT_BYTES: u64 = 32 * 1024;

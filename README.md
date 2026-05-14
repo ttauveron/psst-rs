@@ -1,6 +1,6 @@
-# secret-rs
+# psst-rs
 
-Service minimal de partage de secrets a lecture unique.
+`psst` est un service minimal de partage de secrets a lecture unique. Le nom technique du projet reste `psst-rs`.
 
 Le secret est chiffre dans le navigateur avec AES-GCM. Le serveur ne recoit que le `ciphertext` et le `nonce`. La cle reste uniquement dans le fragment d'URL, apres `#`.
 
@@ -33,10 +33,10 @@ Les tests couvrent actuellement :
 
 ## Lancer le service en local
 
-Par defaut, l'application essaie d'utiliser `/var/lib/secret-rs/secrets.db`, ce qui n'est pas pratique en dev. Pour un test local, utilise un chemin dans `/tmp`.
+Par defaut, l'application essaie d'utiliser `/var/lib/psst-rs/secrets.db`, ce qui n'est pas pratique en dev. Pour un test local, utilise un chemin dans `/tmp`.
 
 ```bash
-SECRET_RS_DATABASE_PATH=/tmp/secret-rs-dev.db cargo run
+SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db cargo run
 ```
 
 Le serveur ecoute ensuite sur :
@@ -65,7 +65,7 @@ ok
 1. Lance le serveur localement :
 
    ```bash
-   SECRET_RS_DATABASE_PATH=/tmp/secret-rs-dev.db cargo run
+   SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db cargo run
    ```
 
 2. Ouvre `http://127.0.0.1:3000/`.
@@ -74,7 +74,7 @@ ok
 
 4. Choisis une expiration.
 
-5. Clique sur `Chiffrer et creer le lien`.
+5. Clique sur `Create psst link`.
 
 6. Verifie qu'un lien apparait sous la forme :
 
@@ -82,10 +82,10 @@ ok
    https://example.tld/s/<id>#<cle>
    ```
 
-   En local, l'hote du lien depend de `SECRET_RS_PUBLIC_BASE_URL`. Par defaut il vaut `https://example.tld`, donc pour un test local plus naturel tu peux lancer :
+   En local, l'hote du lien depend de `SECRET_RS_PUBLIC_BASE_URL`. Par defaut il vaut `https://example.tld`. Pour un test local plus naturel tu peux lancer :
 
    ```bash
-   SECRET_RS_DATABASE_PATH=/tmp/secret-rs-dev.db \
+   SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db \
    SECRET_RS_PUBLIC_BASE_URL=http://127.0.0.1:3000 \
    cargo run
    ```
@@ -112,7 +112,7 @@ Important : le `delete_token` est conserve uniquement en memoire dans le navigat
 Lance le serveur avec :
 
 ```bash
-SECRET_RS_DATABASE_PATH=/tmp/secret-rs-dev.db \
+SECRET_RS_DATABASE_PATH=/tmp/psst-rs-dev.db \
 SECRET_RS_ENABLE_CREATE=false \
 cargo run
 ```

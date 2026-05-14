@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
         bind_addr = %config.bind_addr,
         database_path = %database.path().display(),
         enable_create = config.enable_create,
-        "starting secret-rs"
+        "starting psst-rs"
     );
 
     axum::serve(
@@ -45,5 +45,5 @@ fn init_tracing() {
 }
 
 fn default_log_filter() -> &'static str {
-    "secret_rs=info,warn"
+    "psst_rs=info,warn"
 }

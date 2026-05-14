@@ -562,9 +562,9 @@ mod tests {
         assert!(html.contains(r#"data-max-secret-bytes="16384""#));
         assert!(html.contains(r#"src="/static/app.js""#));
         assert!(html.contains(r#"href="/static/app.css""#));
-        assert!(html.contains("Share safely."));
-        assert!(html.contains("Create a one-time secret link with client-side encryption."));
-        assert!(html.contains("Encrypt and create link"));
+        assert!(html.contains("Share it quietly."));
+        assert!(html.contains("<strong>psst</strong> creates one-time secret links with client-side encryption."));
+        assert!(html.contains("Create psst link"));
         assert!(html.contains("Delete now"));
         assert!(html.contains("nothing can be recovered after read, expiration, or early deletion"));
         assert!(html.contains("The recipient can read the secret only once"));
@@ -596,7 +596,7 @@ mod tests {
         assert!(html.contains("Click to decrypt the secret"));
         assert!(html.contains(r#"id="decrypt-secret-button""#));
         assert!(html.contains(r#"src="/static/app.js""#));
-        assert!(html.contains("the server cannot help if the fragment key is missing or wrong"));
+        assert!(html.contains("<strong>psst</strong> cannot help if the fragment key is missing or wrong"));
     }
 
     #[tokio::test]
@@ -1142,7 +1142,7 @@ mod tests {
             .expect("time should move forward")
             .as_nanos();
 
-        std::env::temp_dir().join(format!("secret-rs-http-{prefix}-{unique}"))
+        std::env::temp_dir().join(format!("psst-rs-http-{prefix}-{unique}"))
     }
 
     impl Drop for TestTempDirGuard {

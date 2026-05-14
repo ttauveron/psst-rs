@@ -3,16 +3,19 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Read secret</title>
+    <title>Open psst</title>
     <link rel="stylesheet" href="/static/app.css">
     <script src="/static/app.js" defer></script>
   </head>
   <body>
     <main class="layout" id="read-app" data-secret-id="{{SECRET_ID}}">
       <header class="hero hero-read">
-        <p class="eyebrow">Single read</p>
-        <h1>Decrypt locally.</h1>
-        <p class="lede">This secret is decrypted in your browser. A successful read removes it from the server immediately, and the server cannot help if the fragment key is missing or wrong.</p>
+        <div class="brand-lockup">
+          <p class="eyebrow">One-time secret link</p>
+          <a class="wordmark" href="/" aria-label="Go to psst home">psst</a>
+        </div>
+        <h1>Read a secret.</h1>
+        <p class="lede">This secret is decrypted in your browser. A successful read removes it from the server immediately, and <strong>psst</strong> cannot help if the fragment key is missing or wrong.</p>
       </header>
 
       <section class="panel">
@@ -24,7 +27,7 @@
       </section>
 
       <footer class="footer">
-        <a href="/">Create another link</a>
+        <a href="/">Share another secret</a>
       </footer>
     </main>
   </body>

@@ -1,4 +1,4 @@
-# ROADMAP — `secret-rs`
+# ROADMAP — `psst-rs`
 
 ## Objectif
 
@@ -341,7 +341,7 @@ Rendre la v1 exploitable sur une petite VM derrière nginx et Cloudflare.
 * Optimiser le profil de build release.
 * Préparer les chemins de déploiement et le fichier d’environnement.
 * Rédiger le service OpenRC.
-* Documenter les permissions système et l’utilisateur dédié `secret-rs`.
+* Documenter les permissions système et l’utilisateur dédié `psst-rs`.
 * Documenter la configuration nginx locale et les points Cloudflare nécessaires.
 
 **Terminé quand**

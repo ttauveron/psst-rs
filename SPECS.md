@@ -6,7 +6,9 @@ Construire un service web minimaliste permettant de partager un secret chiffré 
 
 Le service doit être public en lecture, sans compte utilisateur, sans adresse email, sans login, sans panneau d’administration complexe. La création d’un secret est protégée par Cloudflare Turnstile et par des limites côté application. Le secret est chiffré côté navigateur ; le serveur ne reçoit jamais la clé de déchiffrement.
 
-Nom de travail : `secret-rs`.
+Nom produit : `psst`.
+
+Nom technique du projet : `psst-rs`.
 
 ## 2. Objectifs
 
@@ -97,9 +99,9 @@ Cloudflare
   ↓ HTTPS
 nginx sur Alpine
   ↓ HTTP local
-secret-rs sur 127.0.0.1:3000
+psst-rs sur 127.0.0.1:3000
   ↓
-SQLite /var/lib/secret-rs/secrets.db
+SQLite /var/lib/psst-rs/secrets.db
 ```
 
 L’application Rust n’a pas besoin de gérer TLS directement. TLS est terminé par nginx. L’application écoute uniquement sur `127.0.0.1`.
@@ -413,7 +415,7 @@ Variables d’environnement :
 
 ```text
 SECRET_RS_BIND_ADDR=127.0.0.1:3000
-SECRET_RS_DATABASE_PATH=/var/lib/secret-rs/secrets.db
+SECRET_RS_DATABASE_PATH=/var/lib/psst-rs/secrets.db
 SECRET_RS_PUBLIC_BASE_URL=https://example.tld
 SECRET_RS_MAX_SECRET_BYTES=16384
 SECRET_RS_MAX_CIPHERTEXT_BYTES=32768
@@ -543,18 +545,18 @@ Le firewall de la VM doit accepter 80/443 uniquement depuis les IP Cloudflare. S
 ### 19.1 Fichiers
 
 ```text
-/usr/local/bin/secret-rs
-/etc/secret-rs/env
-/etc/init.d/secret-rs
-/var/lib/secret-rs/secrets.db
-/var/log/secret-rs/
+/usr/local/bin/psst-rs
+/etc/psst-rs/env
+/etc/init.d/psst-rs
+/var/lib/psst-rs/secrets.db
+/var/log/psst-rs/
 ```
 
 ### 19.2 OpenRC
 
-Créer un service OpenRC lançant le binaire avec l’environnement chargé depuis `/etc/secret-rs/env`.
+Créer un service OpenRC lançant le binaire avec l’environnement chargé depuis `/etc/psst-rs/env`.
 
-L’utilisateur système `secret-rs` doit être non-root et propriétaire de `/var/lib/secret-rs`.
+L’utilisateur système `psst-rs` doit être non-root et propriétaire de `/var/lib/psst-rs`.
 
 ## 20. Compilation Rust pour petit binaire
 

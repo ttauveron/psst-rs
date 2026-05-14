@@ -871,7 +871,7 @@ mod tests {
             .expect("time should move forward")
             .as_nanos();
 
-        std::env::temp_dir().join(format!("secret-rs-{prefix}-{unique}"))
+        std::env::temp_dir().join(format!("psst-rs-{prefix}-{unique}"))
     }
 
     fn cleanup_temp_dir(path: &std::path::Path) {

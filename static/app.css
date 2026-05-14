@@ -1,20 +1,22 @@
 :root {
   color-scheme: light;
-  --bg: #f5f6f2;
-  --bg-accent: rgba(195, 208, 224, 0.38);
-  --surface: rgba(255, 255, 255, 0.82);
+  --bg: #f7f1e8;
+  --bg-accent: rgba(247, 197, 119, 0.24);
+  --bg-accent-strong: rgba(34, 107, 90, 0.16);
+  --surface: rgba(255, 252, 248, 0.84);
   --surface-strong: #ffffff;
-  --surface-muted: #eef1ec;
-  --border: rgba(22, 32, 51, 0.1);
-  --border-strong: rgba(22, 32, 51, 0.16);
-  --text: #162033;
-  --text-muted: #556176;
-  --text-soft: #738099;
-  --accent: #1f5f99;
-  --accent-strong: #184e7d;
+  --surface-muted: #f2eadf;
+  --border: rgba(52, 39, 26, 0.1);
+  --border-strong: rgba(52, 39, 26, 0.18);
+  --text: #24180f;
+  --text-muted: #665547;
+  --text-soft: #8a7868;
+  --accent: #226b5a;
+  --accent-strong: #184e41;
+  --accent-soft: #f7c577;
   --danger: #b42318;
-  --shadow: 0 18px 40px rgba(28, 40, 62, 0.08);
-  --font-sans: "Avenir Next", "Segoe UI", "Helvetica Neue", Helvetica, sans-serif;
+  --shadow: 0 22px 54px rgba(62, 40, 20, 0.1);
+  --font-sans: "Optima", "Avenir Next", "Segoe UI", "Helvetica Neue", Helvetica, sans-serif;
   --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
 }
 
@@ -24,8 +26,9 @@
 
 html {
   background:
-    radial-gradient(circle at top left, var(--bg-accent), transparent 30rem),
-    linear-gradient(180deg, #fafbf8 0%, var(--bg) 100%);
+    radial-gradient(circle at top left, var(--bg-accent), transparent 28rem),
+    radial-gradient(circle at top right, var(--bg-accent-strong), transparent 26rem),
+    linear-gradient(180deg, #fffaf3 0%, var(--bg) 100%);
 }
 
 body {
@@ -67,6 +70,14 @@ pre {
   margin-bottom: 1.75rem;
 }
 
+.brand-lockup {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.55rem;
+}
+
 .hero-create {
   margin-bottom: 1rem;
 }
@@ -78,6 +89,20 @@ pre {
   font-weight: 600;
   letter-spacing: 0.18em;
   text-transform: uppercase;
+}
+
+.wordmark {
+  margin: 0;
+  color: var(--accent);
+  font-size: clamp(1.65rem, 4vw, 2.25rem);
+  font-weight: 700;
+  letter-spacing: -0.06em;
+  line-height: 0.9;
+  text-decoration: none;
+}
+
+.wordmark:hover {
+  color: var(--accent-strong);
 }
 
 h1,
@@ -161,7 +186,7 @@ h2 {
 .hint code {
   padding: 0.08rem 0.3rem;
   border-radius: 0.4rem;
-  background: rgba(22, 32, 51, 0.05);
+  background: rgba(36, 24, 15, 0.05);
   color: var(--text);
   font-size: 0.94em;
 }
@@ -195,7 +220,7 @@ input[type="text"] {
 }
 
 textarea::placeholder {
-  color: #90a0b6;
+  color: #9f8e81;
 }
 
 textarea {
@@ -208,8 +233,8 @@ select:focus,
 input[type="text"]:focus,
 button:focus-visible {
   outline: none;
-  border-color: rgba(31, 95, 153, 0.46);
-  box-shadow: 0 0 0 4px rgba(31, 95, 153, 0.12);
+  border-color: rgba(34, 107, 90, 0.42);
+  box-shadow: 0 0 0 4px rgba(34, 107, 90, 0.12);
 }
 
 .row {
@@ -253,7 +278,7 @@ button {
   border: 1px solid transparent;
   border-radius: 999px;
   padding: 0.82rem 1.15rem;
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent) 0%, #2f8a74 100%);
   color: #ffffff;
   font-size: 0.98rem;
   font-weight: 600;
@@ -267,7 +292,7 @@ button {
 }
 
 button:hover {
-  background: var(--accent-strong);
+  background: linear-gradient(135deg, var(--accent-strong) 0%, #216b59 100%);
   transform: translateY(-1px);
 }
 
@@ -284,7 +309,7 @@ button:disabled {
 }
 
 .button-secondary:hover {
-  background: rgba(22, 32, 51, 0.04);
+  background: rgba(36, 24, 15, 0.04);
 }
 
 .hint,
@@ -308,8 +333,8 @@ pre {
   margin: 1rem 0 0;
   padding: 1rem 1.05rem;
   border-radius: 1rem;
-  background: #121a29;
-  color: #f5f8fd;
+  background: #1f1811;
+  color: #fff7ee;
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.6;
@@ -328,6 +353,14 @@ pre {
   h1 {
     max-width: 100%;
     font-size: clamp(2.2rem, 12vw, 3.3rem);
+  }
+
+  .brand-lockup {
+    display: block;
+  }
+
+  .wordmark {
+    margin-top: 0.25rem;
   }
 
   .hero-read h1 {

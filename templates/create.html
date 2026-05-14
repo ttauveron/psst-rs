@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>secret-rs</title>
+    <title>psst</title>
     <link rel="stylesheet" href="/static/app.css">
     <script src="/static/app.js" defer></script>
   </head>
@@ -16,9 +16,12 @@
       data-enable-create="{{ENABLE_CREATE}}"
     >
       <header class="hero hero-create">
-        <p class="eyebrow">secret-rs</p>
-        <h1>Share safely.</h1>
-        <p class="lede">Create a one-time secret link with client-side encryption. The browser generates the key, encrypts the secret locally, and sends only ciphertext and a nonce to the server. The key stays in the <code>#</code> fragment, the secret can be read once, and nothing can be recovered after read, expiration, or early deletion.</p>
+        <div class="brand-lockup">
+          <p class="eyebrow">One-time secret link</p>
+          <a class="wordmark" href="/" aria-label="Go to psst home">psst</a>
+        </div>
+        <h1>Share a secret.</h1>
+        <p class="lede"><strong>psst</strong> creates one-time secret links with client-side encryption. Your browser generates the key, encrypts the secret locally, and sends only ciphertext plus a nonce to the server. The key stays in the <code>#</code> fragment, the secret can be read once, and nothing can be recovered after read, expiration, or early deletion.</p>
       </header>
 
       <section class="panel">
@@ -40,19 +43,19 @@
           </div>
 
           <div class="actions">
-            <button id="create-button" type="submit">Encrypt and create link</button>
+            <button id="create-button" type="submit">Create psst link</button>
           </div>
         </form>
 
         <section class="result-card" id="create-result" hidden>
-          <h2>Share link</h2>
+          <h2>Share psst link</h2>
           <p>The recipient must receive the full link, including the fragment.</p>
           <label class="field">
             <span>Link</span>
             <input id="share-link" type="text" readonly>
           </label>
           <div class="actions">
-            <button id="copy-link-button" type="button">Copy</button>
+            <button id="copy-link-button" type="button">Copy link</button>
             <button id="delete-secret-button" type="button" class="button-secondary">Delete now</button>
           </div>
           <p class="hint">Early deletion destroys the secret before its first read.</p>

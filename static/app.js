@@ -117,14 +117,14 @@ async function bootCreatePage(root) {
       result.scrollIntoView({ behavior: "smooth", block: "nearest" })
       setText(
         "create-status",
-        "Link generated. The server does not know the key, and the secret can be read only once.",
+        "psst link generated. The server does not know the key, and the secret can be read only once.",
       )
     } catch (error) {
       latestSecretReference = null
       setText("create-status", mapCreateErrorMessage(error))
     } finally {
       createButton.disabled = false
-      createButton.textContent = "Encrypt and create link"
+      createButton.textContent = "Create psst link"
     }
   })
 
