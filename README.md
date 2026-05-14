@@ -23,6 +23,42 @@ Suite de tests :
 cargo test
 ```
 
+## Deploiement home lab
+
+Le flux le plus simple passe par le `Makefile` du repo.
+
+1. Cree `.env` a la racine depuis `.env.example`.
+2. Renseigne :
+
+```dotenv
+CLOUDFLARE_API_TOKEN=...
+PSST_TURNSTILE_SITE_KEY=...
+PSST_TURNSTILE_SECRET_KEY=...
+```
+
+3. Lance :
+
+```bash
+make deploy
+```
+
+Cette commande :
+
+- compile un binaire release compatible Alpine via musl ;
+- le copie vers `ansible/files/bin/psst-rs` ;
+- applique Terraform ;
+- deploie avec Ansible.
+
+Le fichier `.env` est ignore par Git. Ne committe pas de secrets ; garde seulement `.env.example` dans le repo.
+
+Pour le dev local, `make build-release` conserve un build natif de ta machine. Le packaging de deploiement passe par `make build-release-alpine` dans un conteneur Docker.
+
+Si Terraform est deja applique et que tu veux seulement redéployer l'application :
+
+```bash
+make deploy-no-terraform
+```
+
 Les tests couvrent actuellement :
 
 - la configuration ;
@@ -157,4 +193,4 @@ Ce depot couvre aujourd'hui :
 - l'interface v1 ;
 - les tests backend et HTTP.
 
-Les protections anti-abus avancees prevues plus tard, comme la vraie verification Turnstile et le rate limiting, ne sont pas encore branchees.
+La verification Turnstile cote serveur est branchee. Le rate limiting reste a faire.

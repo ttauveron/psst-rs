@@ -9,3 +9,4 @@
 !/ansible/files/tls/.gitkeep
 
 /terraform/cloudflare.auto.tfvars
+/.env
