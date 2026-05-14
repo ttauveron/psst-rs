@@ -173,16 +173,12 @@ async fn create_secret_stub(
 ) -> Result<Json<CreateSecretResponse>, ApiError> {
     let now_timestamp = current_timestamp()?;
     let validated = validate_create_request(&state.config, &payload)?;
+    let client_ip = client_ip.map(|Extension(client_ip)| client_ip);
 
     ensure_create_enabled(&state.config)?;
     enforce_global_create_quotas(&state, now_timestamp, validated.ciphertext_size_bytes)?;
     check_create_rate_limit_hook(&state)?;
-    verify_turnstile(
-        &state,
-        client_ip.map(|Extension(client_ip)| client_ip.0),
-        &payload,
-    )
-    .await?;
+    verify_turnstile(&state, client_ip.map(|client_ip| client_ip.0), &payload).await?;
 
     let generated = generate_secret_reference();
     let expires_at = now_timestamp
@@ -200,7 +196,8 @@ async fn create_secret_stub(
         expires_at,
         delete_token_hash: generated.delete_token_hash,
         size_bytes: validated.ciphertext_size_bytes,
-        requester_ip_hash: None,
+        requester_ip_hash: client_ip
+            .map(|client_ip| client_ip.hashed_identifier(&state.config.ip_hash_salt)),
     };
 
     state
@@ -624,6 +621,7 @@ mod tests {
     use axum::{
         Json,
         body::Body,
+        extract::ConnectInfo,
         http::{Method, Request, StatusCode, header},
         response::IntoResponse,
         routing::post,
@@ -635,6 +633,7 @@ mod tests {
     use crate::{
         config::AppConfig,
         db::{Database, NewSecretRecord},
+        request_context::ClientIp,
         secret::{generate_secret_reference, hash_delete_token},
     };
 
@@ -825,6 +824,8 @@ mod tests {
         let verifier = start_turnstile_test_server(TurnstileScenario::Success).await;
         let mut config = AppConfig::default();
         config.turnstile_verify_url = verifier.url.clone();
+        let expected_requester_ip_hash = ClientIp("203.0.113.10".parse().expect("ip should parse"))
+            .hashed_identifier(&config.ip_hash_salt);
         let (_guard, app, database) = test_router("create-success", config);
 
         let response = app
@@ -832,6 +833,8 @@ mod tests {
                 Request::builder()
                     .method(Method::POST)
                     .uri("/api/create")
+                    .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 12345))))
+                    .header("cf-connecting-ip", "203.0.113.10")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"valid-turnstile-token"}"#,
@@ -862,13 +865,14 @@ mod tests {
             .expect("database connection should open");
         let stored = connection
             .query_row(
-                "SELECT ciphertext, nonce, delete_token_hash FROM secrets WHERE id = ?1",
+                "SELECT ciphertext, nonce, delete_token_hash, requester_ip_hash FROM secrets WHERE id = ?1",
                 [secret_id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 },
             )
@@ -877,6 +881,7 @@ mod tests {
         assert_eq!(stored.0, "ciphertext-value");
         assert_eq!(stored.1, "nonce-value");
         assert_eq!(stored.2, hash_delete_token(delete_token));
+        assert_eq!(stored.3, Some(expected_requester_ip_hash));
     }
 
     #[tokio::test]
