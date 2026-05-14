@@ -181,10 +181,9 @@ async function bootCreatePage(root) {
     }
 
     try {
-      await navigator.clipboard.writeText(shareLink.value)
+      await copyText(shareLink.value)
       setText("copy-status", "Link copied.")
     } catch (_error) {
-      shareLink.select()
       setText("copy-status", "Automatic copy is unavailable, please copy the link manually.")
     }
   })
@@ -331,14 +330,19 @@ function syncCreateButtonState(button, turnstileState) {
 async function bootReadPage(root) {
   const secretId = root.dataset.secretId
   const decryptButton = document.getElementById("decrypt-secret-button")
+  const copyButton = document.getElementById("copy-secret-button")
   const secretOutput = document.getElementById("secret-output")
 
   decryptButton.addEventListener("click", async () => {
     const rawKey = window.location.hash.slice(1)
 
+    if (copyButton) {
+      copyButton.hidden = true
+    }
     secretOutput.hidden = true
     secretOutput.textContent = ""
     setText("read-status", "")
+    setText("read-copy-status", "")
 
     if (!rawKey) {
       setText("read-status", "Incomplete link: missing key.")
@@ -376,6 +380,9 @@ async function bootReadPage(root) {
       history.replaceState(null, "", `${window.location.pathname}${window.location.search}`)
       secretOutput.hidden = false
       secretOutput.textContent = textDecoder.decode(plaintextBuffer)
+      if (copyButton) {
+        copyButton.hidden = false
+      }
       setText("read-status", "Secret decrypted locally. The fragment has been removed from the URL.")
       decryptButton.disabled = true
       decryptButton.textContent = "Secret already read"
@@ -387,6 +394,21 @@ async function bootReadPage(root) {
     decryptButton.disabled = false
     decryptButton.textContent = "Decrypt secret"
   })
+
+  if (copyButton) {
+    copyButton.addEventListener("click", async () => {
+      if (!secretOutput.textContent) {
+        return
+      }
+
+      try {
+        await copyText(secretOutput.textContent)
+        setText("read-copy-status", "Secret copied.")
+      } catch (_error) {
+        setText("read-copy-status", "Automatic copy is unavailable, please copy the secret manually.")
+      }
+    })
+  }
 }
 
 function updateSecretSize(plaintext, maxSecretBytes) {
@@ -409,6 +431,30 @@ function setText(id, value) {
   const node = document.getElementById(id)
   if (node) {
     node.textContent = value
+  }
+}
+
+async function copyText(value) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+
+  const helper = document.createElement("textarea")
+  helper.value = value
+  helper.setAttribute("readonly", "")
+  helper.style.position = "absolute"
+  helper.style.left = "-9999px"
+  document.body.appendChild(helper)
+  helper.select()
+
+  try {
+    const copied = document.execCommand("copy")
+    if (!copied) {
+      throw new Error("Copy command failed.")
+    }
+  } finally {
+    helper.remove()
   }
 }
 
