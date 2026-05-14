@@ -20,6 +20,7 @@ const DEFAULT_GLOBAL_MAX_STORAGE_BYTES: u64 = 50 * 1024 * 1024;
 const DEFAULT_CREATE_RATE_LIMIT_PER_MINUTE: u64 = 5;
 const DEFAULT_CREATE_RATE_LIMIT_PER_HOUR: u64 = 30;
 const DEFAULT_READ_RATE_LIMIT_PER_MINUTE: u64 = 60;
+const DEFAULT_IP_HASH_SALT: &str = "";
 const DEFAULT_TRUSTED_PROXY_IPS: &str = "127.0.0.1,::1";
 const DEFAULT_TURNSTILE_VERIFY_URL: &str =
     "https://challenges.cloudflare.com/turnstile/v0/siteverify";
@@ -39,6 +40,7 @@ pub struct AppConfig {
     pub create_rate_limit_per_minute: u64,
     pub create_rate_limit_per_hour: u64,
     pub read_rate_limit_per_minute: u64,
+    pub ip_hash_salt: String,
     pub trusted_proxy_ips: Vec<IpAddr>,
     pub turnstile_site_key: String,
     pub turnstile_secret_key: String,
@@ -116,6 +118,7 @@ impl AppConfig {
                 "SECRET_RS_READ_RATE_LIMIT_PER_MINUTE",
                 DEFAULT_READ_RATE_LIMIT_PER_MINUTE.to_string().as_str(),
             )?,
+            ip_hash_salt: env_or_string(&get_var, "SECRET_RS_IP_HASH_SALT", DEFAULT_IP_HASH_SALT),
             trusted_proxy_ips: env_or_ip_list(
                 &get_var,
                 "SECRET_RS_TRUSTED_PROXY_IPS",
@@ -183,6 +186,10 @@ impl AppConfig {
             bail!("SECRET_RS_READ_RATE_LIMIT_PER_MINUTE must be greater than zero");
         }
 
+        if self.ip_hash_salt.trim().is_empty() {
+            bail!("SECRET_RS_IP_HASH_SALT must not be empty");
+        }
+
         if self.trusted_proxy_ips.is_empty() {
             bail!("SECRET_RS_TRUSTED_PROXY_IPS must not be empty");
         }
@@ -221,6 +228,7 @@ impl Default for AppConfig {
             create_rate_limit_per_minute: DEFAULT_CREATE_RATE_LIMIT_PER_MINUTE,
             create_rate_limit_per_hour: DEFAULT_CREATE_RATE_LIMIT_PER_HOUR,
             read_rate_limit_per_minute: DEFAULT_READ_RATE_LIMIT_PER_MINUTE,
+            ip_hash_salt: "test-ip-hash-salt".to_owned(),
             trusted_proxy_ips: vec![
                 "127.0.0.1"
                     .parse()
@@ -293,6 +301,7 @@ mod tests {
     #[test]
     fn loads_default_configuration() {
         let config = AppConfig::from_lookup(|key| match key {
+            "SECRET_RS_IP_HASH_SALT" => Some("test-ip-hash-salt".to_owned()),
             "SECRET_RS_TURNSTILE_SITE_KEY" => Some("site-key".to_owned()),
             "SECRET_RS_TURNSTILE_SECRET_KEY" => Some("secret-key".to_owned()),
             _ => None,
@@ -307,6 +316,7 @@ mod tests {
         assert_eq!(config.create_rate_limit_per_minute, 5);
         assert_eq!(config.create_rate_limit_per_hour, 30);
         assert_eq!(config.read_rate_limit_per_minute, 60);
+        assert_eq!(config.ip_hash_salt, "test-ip-hash-salt");
         assert_eq!(config.trusted_proxy_ips.len(), 2);
         assert_eq!(config.turnstile_site_key, "site-key");
         assert_eq!(config.turnstile_secret_key, "secret-key");
@@ -315,6 +325,7 @@ mod tests {
     #[test]
     fn loads_configured_rate_limits() {
         let config = AppConfig::from_lookup(|key| match key {
+            "SECRET_RS_IP_HASH_SALT" => Some("test-ip-hash-salt".to_owned()),
             "SECRET_RS_TURNSTILE_SITE_KEY" => Some("site-key".to_owned()),
             "SECRET_RS_TURNSTILE_SECRET_KEY" => Some("secret-key".to_owned()),
             "SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE" => Some("7".to_owned()),
@@ -331,12 +342,30 @@ mod tests {
 
     #[test]
     fn rejects_missing_turnstile_keys_when_creation_is_enabled() {
-        let error = AppConfig::from_lookup(|_| None).expect_err("config should be rejected");
+        let error = AppConfig::from_lookup(|key| match key {
+            "SECRET_RS_IP_HASH_SALT" => Some("test-ip-hash-salt".to_owned()),
+            _ => None,
+        })
+        .expect_err("config should be rejected");
 
         assert!(
             error
                 .to_string()
                 .contains("SECRET_RS_TURNSTILE_SITE_KEY must not be empty")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_ip_hash_salt() {
+        let mut config = AppConfig::default();
+        config.ip_hash_salt.clear();
+
+        let error = config.validate().expect_err("config should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("SECRET_RS_IP_HASH_SALT must not be empty")
         );
     }
 
