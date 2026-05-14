@@ -12,10 +12,9 @@ use axum::{
     response::{Html, IntoResponse},
     routing::{get, post},
 };
-use serde::Deserialize;
 use tracing::info;
 
-use crate::{config::AppConfig, request_context::ClientIp};
+use crate::{config::AppConfig, request_context::ClientIp, secret::CreateSecretRequest};
 
 static HEADER_PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
 
@@ -34,14 +33,6 @@ const HTML_CSP: &str = concat!(
 #[derive(Clone)]
 struct AppState {
     config: AppConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct CreateSecretRequest {
-    ciphertext: String,
-    nonce: String,
-    expires_in_seconds: u64,
-    turnstile_token: String,
 }
 
 pub fn build_router(config: AppConfig) -> Router {

@@ -2,6 +2,7 @@ mod config;
 mod db;
 mod http;
 mod request_context;
+mod secret;
 
 use anyhow::Result;
 use tracing::info;
