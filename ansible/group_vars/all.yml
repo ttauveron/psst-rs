@@ -8,6 +8,9 @@ psst_packages:
   - libstdc++
   - nginx
 
+psst_use_terraform_outputs: true
+psst_terraform_dir: "../terraform"
+
 psst_domain: "psst.example.com"
 psst_public_base_url: "https://{{ psst_domain }}"
 psst_bind_addr: "127.0.0.1:3000"

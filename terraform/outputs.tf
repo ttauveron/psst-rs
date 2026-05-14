@@ -14,3 +14,8 @@ output "cloudflare_origin_ca_expires_on" {
   description = "Expiration date of the Cloudflare Origin CA certificate."
   value       = try(cloudflare_origin_ca_certificate.main[0].expires_on, null)
 }
+
+output "cloudflare_hostname" {
+  description = "Public hostname served through Cloudflare."
+  value       = try(cloudflare_dns_record.app_ipv6[0].name, null)
+}

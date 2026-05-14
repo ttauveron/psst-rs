@@ -14,23 +14,65 @@
     - name: Gather facts
       ansible.builtin.setup:
 
-    - name: Assert controller-side deployment artifacts exist
+    - name: Read Terraform outputs when enabled
+      ansible.builtin.command: tofu output -json
+      args:
+        chdir: "{{ playbook_dir }}/{{ psst_terraform_dir }}"
+      delegate_to: localhost
+      become: false
+      register: psst_terraform_outputs_raw
+      changed_when: false
+      when: psst_use_terraform_outputs
+
+    - name: Parse Terraform outputs
+      ansible.builtin.set_fact:
+        psst_terraform_outputs: "{{ psst_terraform_outputs_raw.stdout | from_json }}"
+      when: psst_use_terraform_outputs
+
+    - name: Derive deployment values from Terraform outputs
+      ansible.builtin.set_fact:
+        psst_domain: "{{ psst_terraform_outputs.cloudflare_hostname.value }}"
+        psst_public_base_url: "https://{{ psst_terraform_outputs.cloudflare_hostname.value }}"
+        psst_tls_cert_content: "{{ psst_terraform_outputs.cloudflare_origin_ca_certificate_pem.value }}"
+        psst_tls_key_content: "{{ psst_terraform_outputs.cloudflare_origin_ca_private_key_pem.value }}"
+      no_log: true
+      when:
+        - psst_use_terraform_outputs
+        - psst_terraform_outputs.cloudflare_hostname.value is not none
+        - psst_terraform_outputs.cloudflare_origin_ca_certificate_pem.value is not none
+        - psst_terraform_outputs.cloudflare_origin_ca_private_key_pem.value is not none
+
+    - name: Assert controller-side deployment binary exists
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/{{ psst_binary_src }}"
+      delegate_to: localhost
+      become: false
+      register: psst_local_binary
+
+    - name: Fail when local deployment binary is missing
+      ansible.builtin.assert:
+        that:
+          - psst_local_binary.stat.exists
+        fail_msg: "Missing local deployment artifact: {{ psst_local_binary.stat.path }}"
+
+    - name: Assert controller-side TLS artifacts exist when not using Terraform outputs
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/{{ item }}"
       delegate_to: localhost
       become: false
-      register: psst_local_artifacts
+      register: psst_local_tls_artifacts
       loop:
-        - "{{ psst_binary_src }}"
         - "{{ psst_tls_cert_src }}"
         - "{{ psst_tls_key_src }}"
+      when: psst_tls_cert_content is not defined or psst_tls_key_content is not defined
 
-    - name: Fail when required local artifacts are missing
+    - name: Fail when local TLS artifacts are missing
       ansible.builtin.assert:
         that:
           - item.stat.exists
-        fail_msg: "Missing local deployment artifact: {{ item.stat.path }}"
-      loop: "{{ psst_local_artifacts.results }}"
+        fail_msg: "Missing local TLS artifact: {{ item.stat.path }}"
+      loop: "{{ psst_local_tls_artifacts.results | default([]) }}"
+      when: psst_tls_cert_content is not defined or psst_tls_key_content is not defined
 
   tasks:
     - name: Install runtime packages
@@ -96,14 +138,37 @@
 
     - name: Install TLS certificate
       ansible.builtin.copy:
+        content: "{{ psst_tls_cert_content }}"
+        dest: "{{ psst_tls_cert_dest }}"
+        owner: root
+        group: root
+        mode: "0644"
+      no_log: true
+      notify: Reload nginx
+      when: psst_tls_cert_content is defined
+
+    - name: Install TLS certificate from local file
+      ansible.builtin.copy:
         src: "{{ psst_tls_cert_src }}"
         dest: "{{ psst_tls_cert_dest }}"
         owner: root
         group: root
         mode: "0644"
       notify: Reload nginx
+      when: psst_tls_cert_content is not defined
 
     - name: Install TLS private key
+      ansible.builtin.copy:
+        content: "{{ psst_tls_key_content }}"
+        dest: "{{ psst_tls_key_dest }}"
+        owner: root
+        group: nginx
+        mode: "0640"
+      no_log: true
+      notify: Reload nginx
+      when: psst_tls_key_content is defined
+
+    - name: Install TLS private key from local file
       ansible.builtin.copy:
         src: "{{ psst_tls_key_src }}"
         dest: "{{ psst_tls_key_dest }}"
@@ -112,6 +177,7 @@
         mode: "0640"
       no_log: true
       notify: Reload nginx
+      when: psst_tls_key_content is not defined
 
     - name: Install application environment file
       ansible.builtin.template:
