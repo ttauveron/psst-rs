@@ -19,8 +19,8 @@ use crate::{
     db::{Database, NewSecretRecord, SecretStore},
     request_context::ClientIp,
     secret::{
-        CreateSecretRequest, CreateSecretResponse, ReadSecretResponse, generate_secret_reference,
-        is_allowed_ttl,
+        CreateSecretRequest, CreateSecretResponse, DeleteSecretRequest, DeleteSecretResponse,
+        ReadSecretResponse, generate_secret_reference, hash_delete_token, is_allowed_ttl,
     },
 };
 
@@ -101,6 +101,7 @@ pub fn build_router(config: AppConfig, database: Database) -> Router {
         .route("/about", get(about))
         .route("/healthz", get(healthz))
         .route("/api/create", post(create_secret_stub))
+        .route("/api/delete/{id}", post(delete_secret))
         .route("/api/secrets/{id}", get(read_secret))
         .with_state(app_state)
         .layer(DefaultBodyLimit::max(max_json_body_bytes))
@@ -217,6 +218,30 @@ async fn read_secret(
         ciphertext: secret.ciphertext,
         nonce: secret.nonce,
     }))
+}
+
+async fn delete_secret(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    Path(secret_id): Path<String>,
+    Json(payload): Json<DeleteSecretRequest>,
+) -> Result<Json<DeleteSecretResponse>, ApiError> {
+    if payload.delete_token.is_empty() {
+        return Err(ApiError::bad_request("delete_token must not be empty"));
+    }
+
+    let deleted = state
+        .secret_store
+        .delete_secret_by_id_and_token_hash(&secret_id, &hash_delete_token(&payload.delete_token))
+        .map_err(|error| ApiError::internal(format!("failed to delete secret: {error}")))?;
+
+    if !deleted {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "secret not found".to_owned(),
+        });
+    }
+
+    Ok(Json(DeleteSecretResponse { deleted: true }))
 }
 
 async fn apply_security_headers(request: Request, next: Next) -> Response<Body> {
@@ -525,7 +550,7 @@ mod tests {
     #[tokio::test]
     async fn read_route_returns_secret_and_consumes_it() {
         let (_guard, app, database) = test_router("read-success", AppConfig::default());
-        let secret_id = insert_test_secret(
+        let generated = insert_test_secret(
             &database,
             "ciphertext-read",
             "nonce-read",
@@ -536,7 +561,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(format!("/api/secrets/{secret_id}"))
+                    .uri(format!("/api/secrets/{}", generated.secret_id))
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -562,7 +587,7 @@ mod tests {
         let remaining: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM secrets WHERE id = ?1",
-                [secret_id.as_str()],
+                [generated.secret_id.as_str()],
                 |row| row.get(0),
             )
             .expect("count query should succeed");
@@ -573,7 +598,7 @@ mod tests {
     #[tokio::test]
     async fn read_route_returns_404_on_second_read() {
         let (_guard, app, database) = test_router("read-twice", AppConfig::default());
-        let secret_id = insert_test_secret(
+        let generated = insert_test_secret(
             &database,
             "ciphertext-read-twice",
             "nonce-read-twice",
@@ -585,7 +610,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(format!("/api/secrets/{secret_id}"))
+                    .uri(format!("/api/secrets/{}", generated.secret_id))
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -595,7 +620,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(format!("/api/secrets/{secret_id}"))
+                    .uri(format!("/api/secrets/{}", generated.secret_id))
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -609,7 +634,7 @@ mod tests {
     #[tokio::test]
     async fn read_route_returns_404_for_expired_secret() {
         let (_guard, app, database) = test_router("read-expired", AppConfig::default());
-        let secret_id = insert_test_secret(
+        let generated = insert_test_secret(
             &database,
             "ciphertext-expired",
             "nonce-expired",
@@ -620,7 +645,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(format!("/api/secrets/{secret_id}"))
+                    .uri(format!("/api/secrets/{}", generated.secret_id))
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -640,6 +665,110 @@ mod tests {
                     .method(Method::GET)
                     .uri("/api/secrets/does-not-exist")
                     .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_route_deletes_secret_with_matching_token() {
+        let (_guard, app, database) = test_router("delete-success", AppConfig::default());
+        let generated = insert_test_secret(
+            &database,
+            "ciphertext-delete",
+            "nonce-delete",
+            current_timestamp().expect("current timestamp should exist") + 3600,
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/delete/{}", generated.secret_id))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"delete_token":"{}"}}"#,
+                        generated.delete_token
+                    )))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let json: Value = serde_json::from_slice(&body).expect("body should be JSON");
+        assert_eq!(json.get("deleted").and_then(Value::as_bool), Some(true));
+
+        let connection = database
+            .open_connection()
+            .expect("database connection should open");
+        let remaining: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM secrets WHERE id = ?1",
+                [generated.secret_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("count query should succeed");
+
+        assert_eq!(remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_route_returns_404_for_invalid_token() {
+        let (_guard, app, database) = test_router("delete-invalid-token", AppConfig::default());
+        let generated = insert_test_secret(
+            &database,
+            "ciphertext-delete-invalid",
+            "nonce-delete-invalid",
+            current_timestamp().expect("current timestamp should exist") + 3600,
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/delete/{}", generated.secret_id))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"delete_token":"wrong-token"}"#))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let connection = database
+            .open_connection()
+            .expect("database connection should open");
+        let remaining: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM secrets WHERE id = ?1",
+                [generated.secret_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("count query should succeed");
+
+        assert_eq!(remaining, 1);
+    }
+
+    #[tokio::test]
+    async fn delete_route_returns_404_for_missing_secret() {
+        let (_guard, app, _database) = test_router("delete-missing", AppConfig::default());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/delete/does-not-exist")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"delete_token":"some-token"}"#))
                     .expect("request should build"),
             )
             .await
@@ -694,7 +823,7 @@ mod tests {
         ciphertext: &str,
         nonce: &str,
         expires_at: i64,
-    ) -> String {
+    ) -> crate::secret::GeneratedSecretReference {
         let store = crate::db::SecretStore::new(database.clone());
         let generated = generate_secret_reference();
         let now_timestamp = current_timestamp().expect("current timestamp should exist");
@@ -712,6 +841,6 @@ mod tests {
             })
             .expect("secret insertion should succeed");
 
-        generated.secret_id
+        generated
     }
 }
