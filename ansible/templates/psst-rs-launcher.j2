@@ -1,0 +1,6 @@
+#!/bin/sh
+set -a
+. "{{ psst_env_file }}"
+set +a
+
+exec "{{ psst_binary_dest }}"

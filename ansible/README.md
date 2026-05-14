@@ -33,6 +33,49 @@ Dans ce cas, Ansible revient au comportement initial et attend `files/tls/origin
 
 ## Execution
 
+Le flux le plus simple pour un home lab passe par le `Makefile` a la racine du repo.
+
+1. Cree un fichier `.env` a la racine a partir de `.env.example`.
+2. Renseigne dedans :
+
+```dotenv
+CLOUDFLARE_API_TOKEN=...
+PSST_TURNSTILE_SITE_KEY=...
+PSST_TURNSTILE_SECRET_KEY=...
+```
+
+3. Lance ensuite :
+
+```bash
+make deploy
+```
+
+Cette cible :
+
+- compile un binaire release compatible Alpine via musl ;
+- copie `target/x86_64-unknown-linux-musl/release/psst-rs` vers `ansible/files/bin/psst-rs` ;
+- applique Terraform ;
+- lance le playbook Ansible.
+
+Tu peux aussi executer les etapes separement :
+
+```bash
+make terraform-apply
+make ansible-deploy
+```
+
+Ou, pour recompiler et redeployer sans repasser par Terraform :
+
+```bash
+make deploy-no-terraform
+```
+
+Le fichier `.env` est ignore par Git. Le depot ne doit contenir que `.env.example` avec des placeholders.
+
+Le build de deploiement passe par Docker pour produire un binaire `x86_64-unknown-linux-musl`, adapte a Alpine.
+
+## Execution manuelle
+
 ```bash
 cd ansible
 ansible-playbook site.yml --ask-become-pass
@@ -45,7 +88,16 @@ Les variables principales sont dans `group_vars/all.yml` :
 - domaine public ;
 - chemins de deploiement ;
 - variables d'environnement de l'application ;
-- chemins des certificats TLS.
+- chemins des certificats TLS ;
+- resolvers DNS IPv6 pour les hotes IPv6-only.
+
+Par defaut, le playbook ecrit `/etc/resolv.conf` avec les resolvers definis dans `psst_resolv_nameservers` avant meme le bootstrap Python. Cela evite les echecs `apk` sur une VM IPv6-only qui aurait encore des DNS IPv4.
+
+Tu peux desactiver ce comportement avec :
+
+```yaml
+psst_manage_resolv_conf: false
+```
 
 ## Turnstile
 
@@ -57,3 +109,5 @@ Le frontend et l'API attendent maintenant de vraies cles Turnstile:
 Le playbook lit par defaut `PSST_TURNSTILE_SITE_KEY` et `PSST_TURNSTILE_SECRET_KEY` depuis l'environnement du controleur Ansible. Tu peux aussi surcharger `psst_turnstile_site_key` et `psst_turnstile_secret_key` via Ansible Vault.
 
 Si `psst_enable_create: true`, le playbook echoue tant que ces deux valeurs ne sont pas definies.
+
+Le service OpenRC lance `psst-rs` via un petit wrapper shell qui source explicitement `{{ psst_env_file | default('/etc/psst-rs/psst-rs.env') }}` avant d'exec le binaire. Cela evite les ambiguïtés de chargement d'environnement avec `openrc-run`.

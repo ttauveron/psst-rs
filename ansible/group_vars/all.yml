@@ -10,6 +10,11 @@ psst_packages:
 
 psst_use_terraform_outputs: true
 psst_terraform_dir: "../terraform"
+psst_manage_resolv_conf: true
+psst_resolv_nameservers:
+  - "2606:4700:4700::1111"
+  - "2606:4700:4700::1001"
+  - "2001:4860:4860::8888"
 
 psst_domain: "psst.example.com"
 psst_public_base_url: "https://{{ psst_domain }}"
@@ -17,6 +22,7 @@ psst_bind_addr: "127.0.0.1:3000"
 
 psst_binary_src: "files/bin/psst-rs"
 psst_binary_dest: "/usr/local/bin/psst-rs"
+psst_launcher_dest: "/usr/local/bin/psst-rs-launcher"
 
 psst_config_dir: "/etc/psst-rs"
 psst_env_file: "/etc/psst-rs/psst-rs.env"

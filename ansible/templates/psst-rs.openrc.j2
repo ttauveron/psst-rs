@@ -3,14 +3,13 @@
 name="{{ psst_app_name }}"
 description="psst-rs web application"
 
-command="{{ psst_binary_dest }}"
+command="{{ psst_launcher_dest }}"
 command_user="{{ psst_app_user }}:{{ psst_app_group }}"
 directory="{{ psst_data_dir }}"
 pidfile="/run/${RC_SVCNAME}.pid"
 command_background="yes"
 output_log="{{ psst_log_dir }}/stdout.log"
 error_log="{{ psst_log_dir }}/stderr.log"
-env_file="{{ psst_env_file }}"
 
 depend() {
     need net localmount
