@@ -2,6 +2,13 @@ const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 const AES_GCM_NONCE_BYTES = 12
 let latestSecretReference = null
+let pendingTurnstileConfig = null
+
+window.onPsstTurnstileLoad = () => {
+  if (pendingTurnstileConfig) {
+    renderTurnstileWidget(pendingTurnstileConfig)
+  }
+}
 
 document.addEventListener("DOMContentLoaded", () => {
   const createRoot = document.getElementById("create-app")
@@ -30,12 +37,14 @@ async function bootCreatePage(root) {
   const result = document.getElementById("create-result")
   const copyButton = document.getElementById("copy-link-button")
   const deleteButton = document.getElementById("delete-secret-button")
+  const turnstileTokenInput = document.getElementById("turnstile-token")
   const maxSecretBytes = Number(root.dataset.maxSecretBytes)
   const enableCreate = root.dataset.enableCreate === "true"
   const turnstileSiteKey = root.dataset.turnstileSiteKey || ""
 
   updateSecretSize(input.value, maxSecretBytes)
   input.addEventListener("input", () => {
+    armTurnstileForNextSecret(turnstileState, createButton)
     updateSecretSize(input.value, maxSecretBytes)
   })
 
@@ -47,7 +56,21 @@ async function bootCreatePage(root) {
     return
   }
 
-  const turnstileState = mountTurnstile(turnstileSiteKey)
+  const turnstileState = createTurnstileState()
+  pendingTurnstileConfig = {
+    siteKey: turnstileSiteKey,
+    tokenInput: turnstileTokenInput,
+    createButton,
+    state: turnstileState,
+  }
+  if (window.turnstile && typeof window.turnstile.render === "function") {
+    renderTurnstileWidget(pendingTurnstileConfig)
+  }
+  syncCreateButtonState(createButton, turnstileState)
+
+  ttlSelect.addEventListener("change", () => {
+    armTurnstileForNextSecret(turnstileState, createButton)
+  })
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault()
@@ -76,7 +99,15 @@ async function bootCreatePage(root) {
       return
     }
 
-    if (!turnstileState.token) {
+    if (turnstileState.consumed) {
+      resetTurnstile(turnstileState)
+      syncCreateButtonState(createButton, turnstileState)
+      setText("create-status", "Complete the anti-abuse verification before creating another secret.")
+      return
+    }
+
+    const turnstileToken = turnstileTokenInput ? turnstileTokenInput.value : ""
+    if (!turnstileToken) {
       setText("create-status", "Complete the anti-abuse verification before creating a secret.")
       return
     }
@@ -105,9 +136,11 @@ async function bootCreatePage(root) {
           ciphertext: bytesToBase64Url(ciphertext),
           nonce: bytesToBase64Url(nonce),
           expires_in_seconds: Number(ttlSelect.value),
-          turnstile_token: turnstileState.token,
+          turnstile_token: turnstileToken,
         }),
       })
+      turnstileState.consumed = true
+      syncCreateButtonState(createButton, turnstileState)
 
       const payload = await readJson(response)
       if (!response.ok) {
@@ -135,8 +168,7 @@ async function bootCreatePage(root) {
       latestSecretReference = null
       setText("create-status", mapCreateErrorMessage(error))
     } finally {
-      resetTurnstile(turnstileState)
-      createButton.disabled = false
+      syncCreateButtonState(createButton, turnstileState)
       createButton.textContent = "Create psst link"
     }
   })
@@ -193,39 +225,62 @@ async function bootCreatePage(root) {
   })
 }
 
-function mountTurnstile(siteKey) {
-  const widgetRoot = document.getElementById("turnstile-widget")
-  const state = {
+function createTurnstileState() {
+  return {
     ready: false,
-    token: "",
+    consumed: false,
     widgetId: null,
+    rendered: false,
   }
+}
 
-  if (!widgetRoot || !siteKey || !window.turnstile || typeof window.turnstile.render !== "function") {
-    return state
+function renderTurnstileWidget(config) {
+  const widgetRoot = document.getElementById("turnstile-widget")
+  const {
+    siteKey,
+    tokenInput,
+    createButton,
+    state,
+  } = config
+
+  if (!widgetRoot || !siteKey || !window.turnstile || typeof window.turnstile.render !== "function" || state.rendered) {
+    return
   }
 
   state.widgetId = window.turnstile.render(widgetRoot, {
     sitekey: siteKey,
     theme: "light",
+    responseField: false,
     callback(token) {
-      state.ready = true
-      state.token = token
+      updateTurnstileToken(state, createButton, tokenInput, token)
     },
     "expired-callback"() {
       state.ready = true
-      state.token = ""
-      setText("create-status", "Anti-abuse verification expired. Complete it again before retrying.")
+      state.consumed = false
+      if (tokenInput) {
+        tokenInput.value = ""
+      }
+      syncCreateButtonState(createButton, state)
+      if (!latestSecretReference) {
+        setText("create-status", "Anti-abuse verification expired. Complete it again before retrying.")
+      }
     },
     "error-callback"() {
       state.ready = false
-      state.token = ""
-      setText("create-status", "Anti-abuse verification failed to load. Reload the page and try again.")
+      state.consumed = false
+      if (tokenInput) {
+        tokenInput.value = ""
+      }
+      syncCreateButtonState(createButton, state)
+      if (!latestSecretReference) {
+        setText("create-status", "Anti-abuse verification failed to load. Reload the page and try again.")
+      }
     },
   })
 
   state.ready = true
-  return state
+  state.rendered = true
+  syncCreateButtonState(createButton, state)
 }
 
 function resetTurnstile(state) {
@@ -233,8 +288,41 @@ function resetTurnstile(state) {
     return
   }
 
-  state.token = ""
+  const tokenInput = document.getElementById("turnstile-token")
+  if (tokenInput) {
+    tokenInput.value = ""
+  }
+  state.consumed = false
   window.turnstile.reset(state.widgetId)
+}
+
+function armTurnstileForNextSecret(state, button) {
+  if (!state || !state.consumed) {
+    return
+  }
+
+  resetTurnstile(state)
+  syncCreateButtonState(button, state)
+  setText("create-status", "Complete the anti-abuse verification before creating another secret.")
+}
+
+function updateTurnstileToken(state, button, tokenInput, token) {
+  state.ready = true
+  state.consumed = false
+  if (tokenInput) {
+    tokenInput.value = token
+  }
+  syncCreateButtonState(button, state)
+}
+
+function syncCreateButtonState(button, turnstileState) {
+  if (!button || !turnstileState) {
+    return
+  }
+
+  const tokenInput = document.getElementById("turnstile-token")
+  const hasToken = tokenInput ? tokenInput.value.length > 0 : false
+  button.disabled = !turnstileState.ready || !hasToken || turnstileState.consumed
 }
 
 async function bootReadPage(root) {
