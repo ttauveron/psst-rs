@@ -59,36 +59,36 @@ impl AppConfig {
         F: Fn(&str) -> Option<String>,
     {
         let config = Self {
-            bind_addr: env_or_parse(&get_var, "SECRET_RS_BIND_ADDR", DEFAULT_BIND_ADDR)?,
-            database_path: env_or_path(&get_var, "SECRET_RS_DATABASE_PATH", DEFAULT_DATABASE_PATH),
+            bind_addr: env_or_parse(&get_var, "PSST_RS_BIND_ADDR", DEFAULT_BIND_ADDR)?,
+            database_path: env_or_path(&get_var, "PSST_RS_DATABASE_PATH", DEFAULT_DATABASE_PATH),
             public_base_url: env_or_string(
                 &get_var,
-                "SECRET_RS_PUBLIC_BASE_URL",
+                "PSST_RS_PUBLIC_BASE_URL",
                 DEFAULT_PUBLIC_BASE_URL,
             ),
             max_secret_bytes: env_or_parse(
                 &get_var,
-                "SECRET_RS_MAX_SECRET_BYTES",
+                "PSST_RS_MAX_SECRET_BYTES",
                 DEFAULT_MAX_SECRET_BYTES.to_string().as_str(),
             )?,
             max_ciphertext_bytes: env_or_parse(
                 &get_var,
-                "SECRET_RS_MAX_CIPHERTEXT_BYTES",
+                "PSST_RS_MAX_CIPHERTEXT_BYTES",
                 DEFAULT_MAX_CIPHERTEXT_BYTES.to_string().as_str(),
             )?,
             default_ttl_seconds: env_or_parse(
                 &get_var,
-                "SECRET_RS_DEFAULT_TTL_SECONDS",
+                "PSST_RS_DEFAULT_TTL_SECONDS",
                 DEFAULT_DEFAULT_TTL_SECONDS.to_string().as_str(),
             )?,
             max_ttl_seconds: env_or_parse(
                 &get_var,
-                "SECRET_RS_MAX_TTL_SECONDS",
+                "PSST_RS_MAX_TTL_SECONDS",
                 DEFAULT_MAX_TTL_SECONDS.to_string().as_str(),
             )?,
             enable_create: env_or_parse(
                 &get_var,
-                "SECRET_RS_ENABLE_CREATE",
+                "PSST_RS_ENABLE_CREATE",
                 if DEFAULT_ENABLE_CREATE {
                     "true"
                 } else {
@@ -97,45 +97,45 @@ impl AppConfig {
             )?,
             global_max_active_secrets: env_or_parse(
                 &get_var,
-                "SECRET_RS_GLOBAL_MAX_ACTIVE_SECRETS",
+                "PSST_RS_GLOBAL_MAX_ACTIVE_SECRETS",
                 DEFAULT_GLOBAL_MAX_ACTIVE_SECRETS.to_string().as_str(),
             )?,
             global_max_storage_bytes: env_or_parse(
                 &get_var,
-                "SECRET_RS_GLOBAL_MAX_STORAGE_BYTES",
+                "PSST_RS_GLOBAL_MAX_STORAGE_BYTES",
                 DEFAULT_GLOBAL_MAX_STORAGE_BYTES.to_string().as_str(),
             )?,
             create_rate_limit_per_minute: env_or_parse(
                 &get_var,
-                "SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE",
+                "PSST_RS_CREATE_RATE_LIMIT_PER_MINUTE",
                 DEFAULT_CREATE_RATE_LIMIT_PER_MINUTE.to_string().as_str(),
             )?,
             create_rate_limit_per_hour: env_or_parse(
                 &get_var,
-                "SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR",
+                "PSST_RS_CREATE_RATE_LIMIT_PER_HOUR",
                 DEFAULT_CREATE_RATE_LIMIT_PER_HOUR.to_string().as_str(),
             )?,
             read_rate_limit_per_minute: env_or_parse(
                 &get_var,
-                "SECRET_RS_READ_RATE_LIMIT_PER_MINUTE",
+                "PSST_RS_READ_RATE_LIMIT_PER_MINUTE",
                 DEFAULT_READ_RATE_LIMIT_PER_MINUTE.to_string().as_str(),
             )?,
             maintenance_interval_seconds: env_or_parse(
                 &get_var,
-                "SECRET_RS_MAINTENANCE_INTERVAL_SECONDS",
+                "PSST_RS_MAINTENANCE_INTERVAL_SECONDS",
                 DEFAULT_MAINTENANCE_INTERVAL_SECONDS.to_string().as_str(),
             )?,
-            ip_hash_salt: env_or_string(&get_var, "SECRET_RS_IP_HASH_SALT", DEFAULT_IP_HASH_SALT),
+            ip_hash_salt: env_or_string(&get_var, "PSST_RS_IP_HASH_SALT", DEFAULT_IP_HASH_SALT),
             trusted_proxy_ips: env_or_ip_list(
                 &get_var,
-                "SECRET_RS_TRUSTED_PROXY_IPS",
+                "PSST_RS_TRUSTED_PROXY_IPS",
                 DEFAULT_TRUSTED_PROXY_IPS,
             )?,
-            turnstile_site_key: env_or_string(&get_var, "SECRET_RS_TURNSTILE_SITE_KEY", ""),
-            turnstile_secret_key: env_or_string(&get_var, "SECRET_RS_TURNSTILE_SECRET_KEY", ""),
+            turnstile_site_key: env_or_string(&get_var, "PSST_RS_TURNSTILE_SITE_KEY", ""),
+            turnstile_secret_key: env_or_string(&get_var, "PSST_RS_TURNSTILE_SECRET_KEY", ""),
             turnstile_verify_url: env_or_string(
                 &get_var,
-                "SECRET_RS_TURNSTILE_VERIFY_URL",
+                "PSST_RS_TURNSTILE_VERIFY_URL",
                 DEFAULT_TURNSTILE_VERIFY_URL,
             ),
         };
@@ -146,75 +146,75 @@ impl AppConfig {
 
     fn validate(&self) -> Result<()> {
         if !self.bind_addr.ip().is_loopback() {
-            bail!("SECRET_RS_BIND_ADDR must bind to a loopback address");
+            bail!("PSST_RS_BIND_ADDR must bind to a loopback address");
         }
 
         if self.database_path.as_os_str().is_empty() {
-            bail!("SECRET_RS_DATABASE_PATH must not be empty");
+            bail!("PSST_RS_DATABASE_PATH must not be empty");
         }
 
         if self.public_base_url.trim().is_empty() {
-            bail!("SECRET_RS_PUBLIC_BASE_URL must not be empty");
+            bail!("PSST_RS_PUBLIC_BASE_URL must not be empty");
         }
 
         if self.max_secret_bytes == 0 {
-            bail!("SECRET_RS_MAX_SECRET_BYTES must be greater than zero");
+            bail!("PSST_RS_MAX_SECRET_BYTES must be greater than zero");
         }
 
         if self.max_ciphertext_bytes < self.max_secret_bytes {
-            bail!("SECRET_RS_MAX_CIPHERTEXT_BYTES must be >= SECRET_RS_MAX_SECRET_BYTES");
+            bail!("PSST_RS_MAX_CIPHERTEXT_BYTES must be >= PSST_RS_MAX_SECRET_BYTES");
         }
 
         if self.default_ttl_seconds == 0 {
-            bail!("SECRET_RS_DEFAULT_TTL_SECONDS must be greater than zero");
+            bail!("PSST_RS_DEFAULT_TTL_SECONDS must be greater than zero");
         }
 
         if self.max_ttl_seconds < self.default_ttl_seconds {
-            bail!("SECRET_RS_MAX_TTL_SECONDS must be >= SECRET_RS_DEFAULT_TTL_SECONDS");
+            bail!("PSST_RS_MAX_TTL_SECONDS must be >= PSST_RS_DEFAULT_TTL_SECONDS");
         }
 
         if self.global_max_active_secrets == 0 {
-            bail!("SECRET_RS_GLOBAL_MAX_ACTIVE_SECRETS must be greater than zero");
+            bail!("PSST_RS_GLOBAL_MAX_ACTIVE_SECRETS must be greater than zero");
         }
 
         if self.global_max_storage_bytes == 0 {
-            bail!("SECRET_RS_GLOBAL_MAX_STORAGE_BYTES must be greater than zero");
+            bail!("PSST_RS_GLOBAL_MAX_STORAGE_BYTES must be greater than zero");
         }
 
         if self.create_rate_limit_per_minute == 0 {
-            bail!("SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE must be greater than zero");
+            bail!("PSST_RS_CREATE_RATE_LIMIT_PER_MINUTE must be greater than zero");
         }
 
         if self.create_rate_limit_per_hour == 0 {
-            bail!("SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR must be greater than zero");
+            bail!("PSST_RS_CREATE_RATE_LIMIT_PER_HOUR must be greater than zero");
         }
 
         if self.read_rate_limit_per_minute == 0 {
-            bail!("SECRET_RS_READ_RATE_LIMIT_PER_MINUTE must be greater than zero");
+            bail!("PSST_RS_READ_RATE_LIMIT_PER_MINUTE must be greater than zero");
         }
 
         if self.maintenance_interval_seconds == 0 {
-            bail!("SECRET_RS_MAINTENANCE_INTERVAL_SECONDS must be greater than zero");
+            bail!("PSST_RS_MAINTENANCE_INTERVAL_SECONDS must be greater than zero");
         }
 
         if self.ip_hash_salt.trim().is_empty() {
-            bail!("SECRET_RS_IP_HASH_SALT must not be empty");
+            bail!("PSST_RS_IP_HASH_SALT must not be empty");
         }
 
         if self.trusted_proxy_ips.is_empty() {
-            bail!("SECRET_RS_TRUSTED_PROXY_IPS must not be empty");
+            bail!("PSST_RS_TRUSTED_PROXY_IPS must not be empty");
         }
 
         if self.enable_create && self.turnstile_site_key.trim().is_empty() {
-            bail!("SECRET_RS_TURNSTILE_SITE_KEY must not be empty when creation is enabled");
+            bail!("PSST_RS_TURNSTILE_SITE_KEY must not be empty when creation is enabled");
         }
 
         if self.enable_create && self.turnstile_secret_key.trim().is_empty() {
-            bail!("SECRET_RS_TURNSTILE_SECRET_KEY must not be empty when creation is enabled");
+            bail!("PSST_RS_TURNSTILE_SECRET_KEY must not be empty when creation is enabled");
         }
 
         if self.enable_create && self.turnstile_verify_url.trim().is_empty() {
-            bail!("SECRET_RS_TURNSTILE_VERIFY_URL must not be empty when creation is enabled");
+            bail!("PSST_RS_TURNSTILE_VERIFY_URL must not be empty when creation is enabled");
         }
 
         Ok(())
@@ -313,9 +313,9 @@ mod tests {
     #[test]
     fn loads_default_configuration() {
         let config = AppConfig::from_lookup(|key| match key {
-            "SECRET_RS_IP_HASH_SALT" => Some("test-ip-hash-salt".to_owned()),
-            "SECRET_RS_TURNSTILE_SITE_KEY" => Some("site-key".to_owned()),
-            "SECRET_RS_TURNSTILE_SECRET_KEY" => Some("secret-key".to_owned()),
+            "PSST_RS_IP_HASH_SALT" => Some("test-ip-hash-salt".to_owned()),
+            "PSST_RS_TURNSTILE_SITE_KEY" => Some("site-key".to_owned()),
+            "PSST_RS_TURNSTILE_SECRET_KEY" => Some("secret-key".to_owned()),
             _ => None,
         })
         .expect("default config should load");
@@ -338,13 +338,13 @@ mod tests {
     #[test]
     fn loads_configured_rate_limits() {
         let config = AppConfig::from_lookup(|key| match key {
-            "SECRET_RS_IP_HASH_SALT" => Some("test-ip-hash-salt".to_owned()),
-            "SECRET_RS_TURNSTILE_SITE_KEY" => Some("site-key".to_owned()),
-            "SECRET_RS_TURNSTILE_SECRET_KEY" => Some("secret-key".to_owned()),
-            "SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE" => Some("7".to_owned()),
-            "SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR" => Some("42".to_owned()),
-            "SECRET_RS_READ_RATE_LIMIT_PER_MINUTE" => Some("90".to_owned()),
-            "SECRET_RS_MAINTENANCE_INTERVAL_SECONDS" => Some("45".to_owned()),
+            "PSST_RS_IP_HASH_SALT" => Some("test-ip-hash-salt".to_owned()),
+            "PSST_RS_TURNSTILE_SITE_KEY" => Some("site-key".to_owned()),
+            "PSST_RS_TURNSTILE_SECRET_KEY" => Some("secret-key".to_owned()),
+            "PSST_RS_CREATE_RATE_LIMIT_PER_MINUTE" => Some("7".to_owned()),
+            "PSST_RS_CREATE_RATE_LIMIT_PER_HOUR" => Some("42".to_owned()),
+            "PSST_RS_READ_RATE_LIMIT_PER_MINUTE" => Some("90".to_owned()),
+            "PSST_RS_MAINTENANCE_INTERVAL_SECONDS" => Some("45".to_owned()),
             _ => None,
         })
         .expect("config should load");
@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn rejects_missing_turnstile_keys_when_creation_is_enabled() {
         let error = AppConfig::from_lookup(|key| match key {
-            "SECRET_RS_IP_HASH_SALT" => Some("test-ip-hash-salt".to_owned()),
+            "PSST_RS_IP_HASH_SALT" => Some("test-ip-hash-salt".to_owned()),
             _ => None,
         })
         .expect_err("config should be rejected");
@@ -366,7 +366,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("SECRET_RS_TURNSTILE_SITE_KEY must not be empty")
+                .contains("PSST_RS_TURNSTILE_SITE_KEY must not be empty")
         );
     }
 
@@ -380,7 +380,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("SECRET_RS_IP_HASH_SALT must not be empty")
+                .contains("PSST_RS_IP_HASH_SALT must not be empty")
         );
     }
 
@@ -394,7 +394,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("SECRET_RS_BIND_ADDR must bind to a loopback address")
+                .contains("PSST_RS_BIND_ADDR must bind to a loopback address")
         );
     }
 
@@ -408,7 +408,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("SECRET_RS_TRUSTED_PROXY_IPS must not be empty")
+                .contains("PSST_RS_TRUSTED_PROXY_IPS must not be empty")
         );
     }
 
@@ -422,7 +422,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("SECRET_RS_GLOBAL_MAX_ACTIVE_SECRETS must be greater than zero")
+                .contains("PSST_RS_GLOBAL_MAX_ACTIVE_SECRETS must be greater than zero")
         );
     }
 
@@ -436,7 +436,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE must be greater than zero")
+                .contains("PSST_RS_CREATE_RATE_LIMIT_PER_MINUTE must be greater than zero")
         );
     }
 
@@ -450,7 +450,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR must be greater than zero")
+                .contains("PSST_RS_CREATE_RATE_LIMIT_PER_HOUR must be greater than zero")
         );
     }
 
@@ -464,7 +464,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("SECRET_RS_READ_RATE_LIMIT_PER_MINUTE must be greater than zero")
+                .contains("PSST_RS_READ_RATE_LIMIT_PER_MINUTE must be greater than zero")
         );
     }
 
@@ -478,7 +478,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("SECRET_RS_MAINTENANCE_INTERVAL_SECONDS must be greater than zero")
+                .contains("PSST_RS_MAINTENANCE_INTERVAL_SECONDS must be greater than zero")
         );
     }
 }

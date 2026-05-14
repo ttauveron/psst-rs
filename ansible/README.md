@@ -104,8 +104,8 @@ psst_manage_resolv_conf: false
 
 Le frontend et l'API attendent maintenant de vraies cles Turnstile:
 
-- `SECRET_RS_TURNSTILE_SITE_KEY` cote application ;
-- `SECRET_RS_TURNSTILE_SECRET_KEY` cote verification serveur.
+- `PSST_RS_TURNSTILE_SITE_KEY` cote application ;
+- `PSST_RS_TURNSTILE_SECRET_KEY` cote verification serveur.
 
 Le playbook lit par defaut `PSST_TURNSTILE_SITE_KEY` et `PSST_TURNSTILE_SECRET_KEY` depuis l'environnement du controleur Ansible. Tu peux aussi surcharger `psst_turnstile_site_key` et `psst_turnstile_secret_key` via Ansible Vault.
 
