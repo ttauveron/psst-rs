@@ -485,6 +485,10 @@ function mapCreateErrorMessage(error) {
     return "Complete the anti-abuse verification before creating a secret."
   }
 
+  if (message.includes("rate limit exceeded")) {
+    return "Too many requests from this network. Please wait and try again."
+  }
+
   return message || "Secret creation failed."
 }
 
@@ -501,6 +505,10 @@ function mapReadErrorMessage(error) {
 
   if (message.includes("decrypt") || message.includes("OperationError")) {
     return "Invalid key or corrupted data. Check the full link."
+  }
+
+  if (message.includes("rate limit exceeded")) {
+    return "Too many read attempts from this network. Please wait and try again."
   }
 
   return message || "Unable to decrypt this secret."

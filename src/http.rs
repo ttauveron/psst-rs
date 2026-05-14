@@ -44,6 +44,7 @@ static HEADER_PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissi
 type TurnstileHttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>;
 const APP_CSS: &str = include_str!("../static/app.css");
 const APP_JS: &str = include_str!("../static/app.js");
+const RATE_LIMIT_EXCEEDED_MESSAGE: &str = "rate limit exceeded";
 
 const HTML_CSP: &str = concat!(
     "default-src 'self'; ",
@@ -90,10 +91,10 @@ impl ApiError {
         }
     }
 
-    fn too_many_requests(message: impl Into<String>) -> Self {
+    fn too_many_requests() -> Self {
         Self {
             status: StatusCode::TOO_MANY_REQUESTS,
-            message: message.into(),
+            message: RATE_LIMIT_EXCEEDED_MESSAGE.to_owned(),
         }
     }
 
@@ -555,9 +556,7 @@ fn check_create_rate_limit_hook(
         .map_err(|error| ApiError::internal(format!("failed to update create rate limit: {error}")))?;
 
     if minute_count > state.config.create_rate_limit_per_minute {
-        return Err(ApiError::too_many_requests(
-            "create rate limit exceeded for the current minute",
-        ));
+        return Err(ApiError::too_many_requests());
     }
 
     let hour_bucket = now_timestamp.div_euclid(60 * 60);
@@ -568,9 +567,7 @@ fn check_create_rate_limit_hook(
         .map_err(|error| ApiError::internal(format!("failed to update create rate limit: {error}")))?;
 
     if hour_count > state.config.create_rate_limit_per_hour {
-        return Err(ApiError::too_many_requests(
-            "create rate limit exceeded for the current hour",
-        ));
+        return Err(ApiError::too_many_requests());
     }
 
     Ok(())
@@ -593,9 +590,7 @@ fn check_read_rate_limit(
         .map_err(|error| ApiError::internal(format!("failed to update read rate limit: {error}")))?;
 
     if minute_count > state.config.read_rate_limit_per_minute {
-        return Err(ApiError::too_many_requests(
-            "read rate limit exceeded for the current minute",
-        ));
+        return Err(ApiError::too_many_requests());
     }
 
     Ok(())
