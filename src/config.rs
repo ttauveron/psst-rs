@@ -20,6 +20,7 @@ const DEFAULT_GLOBAL_MAX_STORAGE_BYTES: u64 = 50 * 1024 * 1024;
 const DEFAULT_CREATE_RATE_LIMIT_PER_MINUTE: u64 = 5;
 const DEFAULT_CREATE_RATE_LIMIT_PER_HOUR: u64 = 30;
 const DEFAULT_READ_RATE_LIMIT_PER_MINUTE: u64 = 60;
+const DEFAULT_MAINTENANCE_INTERVAL_SECONDS: u64 = 5 * 60;
 const DEFAULT_IP_HASH_SALT: &str = "";
 const DEFAULT_TRUSTED_PROXY_IPS: &str = "127.0.0.1,::1";
 const DEFAULT_TURNSTILE_VERIFY_URL: &str =
@@ -40,6 +41,7 @@ pub struct AppConfig {
     pub create_rate_limit_per_minute: u64,
     pub create_rate_limit_per_hour: u64,
     pub read_rate_limit_per_minute: u64,
+    pub maintenance_interval_seconds: u64,
     pub ip_hash_salt: String,
     pub trusted_proxy_ips: Vec<IpAddr>,
     pub turnstile_site_key: String,
@@ -118,6 +120,11 @@ impl AppConfig {
                 "SECRET_RS_READ_RATE_LIMIT_PER_MINUTE",
                 DEFAULT_READ_RATE_LIMIT_PER_MINUTE.to_string().as_str(),
             )?,
+            maintenance_interval_seconds: env_or_parse(
+                &get_var,
+                "SECRET_RS_MAINTENANCE_INTERVAL_SECONDS",
+                DEFAULT_MAINTENANCE_INTERVAL_SECONDS.to_string().as_str(),
+            )?,
             ip_hash_salt: env_or_string(&get_var, "SECRET_RS_IP_HASH_SALT", DEFAULT_IP_HASH_SALT),
             trusted_proxy_ips: env_or_ip_list(
                 &get_var,
@@ -186,6 +193,10 @@ impl AppConfig {
             bail!("SECRET_RS_READ_RATE_LIMIT_PER_MINUTE must be greater than zero");
         }
 
+        if self.maintenance_interval_seconds == 0 {
+            bail!("SECRET_RS_MAINTENANCE_INTERVAL_SECONDS must be greater than zero");
+        }
+
         if self.ip_hash_salt.trim().is_empty() {
             bail!("SECRET_RS_IP_HASH_SALT must not be empty");
         }
@@ -228,6 +239,7 @@ impl Default for AppConfig {
             create_rate_limit_per_minute: DEFAULT_CREATE_RATE_LIMIT_PER_MINUTE,
             create_rate_limit_per_hour: DEFAULT_CREATE_RATE_LIMIT_PER_HOUR,
             read_rate_limit_per_minute: DEFAULT_READ_RATE_LIMIT_PER_MINUTE,
+            maintenance_interval_seconds: DEFAULT_MAINTENANCE_INTERVAL_SECONDS,
             ip_hash_salt: "test-ip-hash-salt".to_owned(),
             trusted_proxy_ips: vec![
                 "127.0.0.1"
@@ -316,6 +328,7 @@ mod tests {
         assert_eq!(config.create_rate_limit_per_minute, 5);
         assert_eq!(config.create_rate_limit_per_hour, 30);
         assert_eq!(config.read_rate_limit_per_minute, 60);
+        assert_eq!(config.maintenance_interval_seconds, 300);
         assert_eq!(config.ip_hash_salt, "test-ip-hash-salt");
         assert_eq!(config.trusted_proxy_ips.len(), 2);
         assert_eq!(config.turnstile_site_key, "site-key");
@@ -331,6 +344,7 @@ mod tests {
             "SECRET_RS_CREATE_RATE_LIMIT_PER_MINUTE" => Some("7".to_owned()),
             "SECRET_RS_CREATE_RATE_LIMIT_PER_HOUR" => Some("42".to_owned()),
             "SECRET_RS_READ_RATE_LIMIT_PER_MINUTE" => Some("90".to_owned()),
+            "SECRET_RS_MAINTENANCE_INTERVAL_SECONDS" => Some("45".to_owned()),
             _ => None,
         })
         .expect("config should load");
@@ -338,6 +352,7 @@ mod tests {
         assert_eq!(config.create_rate_limit_per_minute, 7);
         assert_eq!(config.create_rate_limit_per_hour, 42);
         assert_eq!(config.read_rate_limit_per_minute, 90);
+        assert_eq!(config.maintenance_interval_seconds, 45);
     }
 
     #[test]
@@ -450,6 +465,20 @@ mod tests {
             error
                 .to_string()
                 .contains("SECRET_RS_READ_RATE_LIMIT_PER_MINUTE must be greater than zero")
+        );
+    }
+
+    #[test]
+    fn rejects_zero_maintenance_interval_seconds() {
+        let mut config = AppConfig::default();
+        config.maintenance_interval_seconds = 0;
+
+        let error = config.validate().expect_err("config should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("SECRET_RS_MAINTENANCE_INTERVAL_SECONDS must be greater than zero")
         );
     }
 }

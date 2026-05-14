@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod http;
+mod maintenance;
 mod rate_limit;
 mod request_context;
 mod secret;
@@ -9,7 +10,9 @@ use anyhow::Result;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::{config::AppConfig, db::Database, http::build_router};
+use crate::{
+    config::AppConfig, db::Database, http::build_router, maintenance::spawn_periodic_maintenance,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,12 +20,14 @@ async fn main() -> Result<()> {
 
     let config = AppConfig::from_env()?;
     let database = Database::bootstrap(&config)?;
+    spawn_periodic_maintenance(config.clone(), database.clone());
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
 
     info!(
         bind_addr = %config.bind_addr,
         database_path = %database.path().display(),
         enable_create = config.enable_create,
+        maintenance_interval_seconds = config.maintenance_interval_seconds,
         "starting psst-rs"
     );
 

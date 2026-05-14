@@ -63,18 +63,15 @@ mod tests {
             RateLimitBucket::CreateHour.key("ip-hash"),
             "create-hour:ip-hash"
         );
-        assert_eq!(RateLimitBucket::ReadMinute.key("ip-hash"), "read-minute:ip-hash");
+        assert_eq!(
+            RateLimitBucket::ReadMinute.key("ip-hash"),
+            "read-minute:ip-hash"
+        );
     }
 
     #[test]
     fn computes_purge_cutoff_bucket_for_retention_window() {
-        assert_eq!(
-            RateLimitBucket::CreateMinute.purge_cutoff_bucket(600, 2),
-            9
-        );
-        assert_eq!(
-            RateLimitBucket::CreateHour.purge_cutoff_bucket(7_200, 1),
-            2
-        );
+        assert_eq!(RateLimitBucket::CreateMinute.purge_cutoff_bucket(600, 2), 9);
+        assert_eq!(RateLimitBucket::CreateHour.purge_cutoff_bucket(7_200, 1), 2);
     }
 }
