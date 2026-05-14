@@ -1,2 +1,5 @@
 /target
-
+/terraform/.terraform/
+/terraform/*.tfstate
+/terraform/*.tfstate.*
+/terraform/crash.log
