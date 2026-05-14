@@ -45,6 +45,12 @@ pub struct Database {
 }
 
 impl Database {
+    pub fn bootstrap(config: &AppConfig) -> Result<Self> {
+        let database = Self::connect(config)?;
+        database.initialize_schema()?;
+        Ok(database)
+    }
+
     pub fn connect(config: &AppConfig) -> Result<Self> {
         let database = Self {
             path: config.database_path.clone(),
@@ -446,6 +452,24 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_opens_database_and_initializes_schema() {
+        let mut config = AppConfig::default();
+        let temp_root = unique_temp_dir("sqlite-bootstrap");
+        config.database_path = temp_root.join("nested").join("secrets.db");
+
+        let database = Database::bootstrap(&config).expect("database bootstrap should succeed");
+        let connection = database
+            .open_connection()
+            .expect("database connection should open");
+
+        assert!(schema_object_exists(&connection, "table", "secrets"));
+        assert!(schema_object_exists(&connection, "table", "rate_limits"));
+        assert_eq!(database.path(), config.database_path.as_path());
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
     fn secret_store_can_insert_and_fetch_secret() {
         let (temp_root, store) = setup_secret_store("secret-store-insert");
         let new_secret = sample_secret("secret-1", 1_700_000_000, 1_700_086_400);
@@ -662,6 +686,59 @@ mod tests {
         cleanup_temp_dir(&temp_root);
     }
 
+    #[test]
+    fn secret_store_rolls_back_immediate_transactions_on_error() {
+        let (temp_root, store) = setup_secret_store("secret-store-tx-rollback");
+        let new_secret = sample_secret("secret-rollback", 1_700_000_000, 1_700_086_400);
+
+        let error = store
+            .with_immediate_transaction(|connection| -> anyhow::Result<()> {
+                connection
+                    .execute(
+                        "INSERT INTO secrets (
+                            id,
+                            ciphertext,
+                            nonce,
+                            created_at,
+                            expires_at,
+                            consumed_at,
+                            delete_token_hash,
+                            size_bytes,
+                            requester_ip_hash
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8)",
+                        params![
+                            &new_secret.id,
+                            &new_secret.ciphertext,
+                            &new_secret.nonce,
+                            new_secret.created_at,
+                            new_secret.expires_at,
+                            &new_secret.delete_token_hash,
+                            i64::try_from(new_secret.size_bytes)
+                                .context("secret size should fit SQLite integer")?,
+                            &new_secret.requester_ip_hash,
+                        ],
+                    )
+                    .context("insert in rollback test should succeed")?;
+
+                anyhow::bail!("force transaction rollback for test");
+            })
+            .expect_err("transaction should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("force transaction rollback for test")
+        );
+        assert!(
+            store
+                .get_secret_by_id(&new_secret.id)
+                .expect("secret lookup should succeed")
+                .is_none()
+        );
+
+        cleanup_temp_dir(&temp_root);
+    }
+
     fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -680,10 +757,7 @@ mod tests {
         let temp_root = unique_temp_dir(prefix);
         config.database_path = temp_root.join("secrets.db");
 
-        let database = Database::connect(&config).expect("database should open");
-        database
-            .initialize_schema()
-            .expect("schema initialization should succeed");
+        let database = Database::bootstrap(&config).expect("database bootstrap should succeed");
 
         (temp_root, SecretStore::new(database))
     }

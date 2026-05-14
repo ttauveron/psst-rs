@@ -14,8 +14,7 @@ async fn main() -> Result<()> {
     init_tracing();
 
     let config = AppConfig::from_env()?;
-    let database = Database::connect(&config)?;
-    database.initialize_schema()?;
+    let database = Database::bootstrap(&config)?;
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
 
     info!(
