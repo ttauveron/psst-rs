@@ -11,3 +11,4 @@
 /terraform/cloudflare.auto.tfvars
 /.env
 .gstack/
+WORKSPACE.md
