@@ -3,3 +3,7 @@
 /terraform/*.tfstate
 /terraform/*.tfstate.*
 /terraform/crash.log
+/ansible/files/bin/*
+/ansible/files/tls/*
+!/ansible/files/bin/.gitkeep
+!/ansible/files/tls/.gitkeep

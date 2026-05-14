@@ -1,0 +1,178 @@
+- name: Configure Alpine VM for psst-rs
+  hosts: alpine_web
+  gather_facts: false
+
+  pre_tasks:
+    - name: Bootstrap python3 if missing
+      ansible.builtin.raw: |
+        if ! command -v python3 >/dev/null 2>&1; then
+          apk add --no-cache python3
+        fi
+      register: psst_python_bootstrap
+      changed_when: psst_python_bootstrap.stdout != "" or psst_python_bootstrap.stderr != ""
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Assert controller-side deployment artifacts exist
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/{{ item }}"
+      delegate_to: localhost
+      become: false
+      register: psst_local_artifacts
+      loop:
+        - "{{ psst_binary_src }}"
+        - "{{ psst_tls_cert_src }}"
+        - "{{ psst_tls_key_src }}"
+
+    - name: Fail when required local artifacts are missing
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: "Missing local deployment artifact: {{ item.stat.path }}"
+      loop: "{{ psst_local_artifacts.results }}"
+
+  tasks:
+    - name: Install runtime packages
+      ansible.builtin.package:
+        name: "{{ psst_packages }}"
+        state: present
+
+    - name: Ensure psst-rs system group exists
+      ansible.builtin.group:
+        name: "{{ psst_app_group }}"
+        system: true
+        state: present
+
+    - name: Ensure psst-rs system user exists
+      ansible.builtin.user:
+        name: "{{ psst_app_user }}"
+        group: "{{ psst_app_group }}"
+        home: "{{ psst_data_dir }}"
+        create_home: false
+        shell: "/sbin/nologin"
+        system: true
+        state: present
+
+    - name: Create application directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - path: "{{ psst_config_dir }}"
+          owner: root
+          group: "{{ psst_app_group }}"
+          mode: "0750"
+        - path: "{{ psst_data_dir }}"
+          owner: "{{ psst_app_user }}"
+          group: "{{ psst_app_group }}"
+          mode: "0750"
+        - path: "{{ psst_log_dir }}"
+          owner: "{{ psst_app_user }}"
+          group: "{{ psst_app_group }}"
+          mode: "0750"
+        - path: "{{ psst_tls_dir }}"
+          owner: root
+          group: nginx
+          mode: "0750"
+
+    - name: Remove default nginx virtual host when present
+      ansible.builtin.file:
+        path: "/etc/nginx/http.d/default.conf"
+        state: absent
+      notify: Reload nginx
+
+    - name: Install Rust application binary
+      ansible.builtin.copy:
+        src: "{{ psst_binary_src }}"
+        dest: "{{ psst_binary_dest }}"
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Restart psst-rs
+
+    - name: Install TLS certificate
+      ansible.builtin.copy:
+        src: "{{ psst_tls_cert_src }}"
+        dest: "{{ psst_tls_cert_dest }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload nginx
+
+    - name: Install TLS private key
+      ansible.builtin.copy:
+        src: "{{ psst_tls_key_src }}"
+        dest: "{{ psst_tls_key_dest }}"
+        owner: root
+        group: nginx
+        mode: "0640"
+      no_log: true
+      notify: Reload nginx
+
+    - name: Install application environment file
+      ansible.builtin.template:
+        src: "templates/psst-rs.env.j2"
+        dest: "{{ psst_env_file }}"
+        owner: root
+        group: "{{ psst_app_group }}"
+        mode: "0640"
+      notify: Restart psst-rs
+
+    - name: Install OpenRC service
+      ansible.builtin.template:
+        src: "templates/psst-rs.openrc.j2"
+        dest: "{{ psst_openrc_service_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Restart psst-rs
+
+    - name: Install nginx reverse proxy configuration
+      ansible.builtin.template:
+        src: "templates/nginx-psst.conf.j2"
+        dest: "{{ psst_nginx_vhost_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload nginx
+
+    - name: Enable psst-rs service at boot
+      ansible.builtin.service:
+        name: "{{ psst_app_name }}"
+        enabled: true
+
+    - name: Enable nginx service at boot
+      ansible.builtin.service:
+        name: nginx
+        enabled: true
+
+    - name: Ensure psst-rs service is running
+      ansible.builtin.service:
+        name: "{{ psst_app_name }}"
+        state: started
+
+    - name: Ensure nginx service is running
+      ansible.builtin.service:
+        name: nginx
+        state: started
+
+  handlers:
+    - name: Restart psst-rs
+      ansible.builtin.service:
+        name: "{{ psst_app_name }}"
+        state: restarted
+
+    - name: Validate nginx configuration
+      ansible.builtin.command: nginx -t
+      listen: Reload nginx
+      changed_when: false
+
+    - name: Reload nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
+      listen: Reload nginx

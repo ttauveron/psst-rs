@@ -1,0 +1,42 @@
+psst_app_name: "psst-rs"
+psst_app_user: "psst-rs"
+psst_app_group: "psst-rs"
+
+psst_packages:
+  - ca-certificates
+  - libgcc
+  - libstdc++
+  - nginx
+
+psst_domain: "psst.example.com"
+psst_public_base_url: "https://{{ psst_domain }}"
+psst_bind_addr: "127.0.0.1:3000"
+
+psst_binary_src: "files/bin/psst-rs"
+psst_binary_dest: "/usr/local/bin/psst-rs"
+
+psst_config_dir: "/etc/psst-rs"
+psst_env_file: "/etc/psst-rs/psst-rs.env"
+psst_data_dir: "/var/lib/psst-rs"
+psst_log_dir: "/var/log/psst-rs"
+psst_database_path: "/var/lib/psst-rs/secrets.db"
+
+psst_tls_dir: "/etc/ssl/psst-rs"
+psst_tls_cert_src: "files/tls/origin.crt"
+psst_tls_key_src: "files/tls/origin.key"
+psst_tls_cert_dest: "/etc/ssl/psst-rs/origin.crt"
+psst_tls_key_dest: "/etc/ssl/psst-rs/origin.key"
+
+psst_openrc_service_path: "/etc/init.d/psst-rs"
+psst_nginx_vhost_path: "/etc/nginx/http.d/psst-rs.conf"
+
+psst_enable_create: true
+psst_max_secret_bytes: 16384
+psst_max_ciphertext_bytes: 32768
+psst_default_ttl_seconds: 86400
+psst_max_ttl_seconds: 2592000
+psst_global_max_active_secrets: 10000
+psst_global_max_storage_bytes: 52428800
+psst_trusted_proxy_ips:
+  - "127.0.0.1"
+  - "::1"
