@@ -75,6 +75,7 @@ async function bootCreatePage(root) {
   form.addEventListener("submit", async (event) => {
     event.preventDefault()
     setText("create-status", "")
+    setText("create-result-status", "")
     setText("copy-status", "")
     setText("delete-status", "")
 
@@ -161,11 +162,12 @@ async function bootCreatePage(root) {
       result.hidden = false
       result.scrollIntoView({ behavior: "smooth", block: "nearest" })
       setText(
-        "create-status",
+        "create-result-status",
         "psst link generated. The server does not know the key, and the secret can be read only once.",
       )
     } catch (error) {
       latestSecretReference = null
+      setText("create-result-status", "")
       setText("create-status", mapCreateErrorMessage(error))
     } finally {
       syncCreateButtonState(createButton, turnstileState)
@@ -215,6 +217,7 @@ async function bootCreatePage(root) {
       latestSecretReference = null
       shareLink.value = ""
       result.hidden = true
+      setText("create-result-status", "")
       setText("delete-status", "Secret deleted before first read.")
       setText("create-status", "The secret has been destroyed. Create a new link if needed.")
     } catch (error) {
