@@ -7,6 +7,7 @@ Le secret est chiffre dans le navigateur avec AES-GCM. Le serveur ne recoit que 
 ## Prerequis
 
 - Rust et Cargo
+- Node.js recent pour les tests frontend automatises
 - un navigateur recent avec Web Crypto API
 
 ## Lancer les tests automatises
@@ -20,7 +21,14 @@ cargo check
 Suite de tests :
 
 ```bash
-cargo test
+make test
+```
+
+Ou en detail :
+
+```bash
+make test-rust
+make test-frontend
 ```
 
 ## Deploiement home lab
@@ -65,7 +73,8 @@ Les tests couvrent actuellement :
 - la couche SQLite ;
 - le cycle de vie des secrets ;
 - les routes HTTP ;
-- les shells HTML utilises par l'interface navigateur.
+- les shells HTML utilises par l'interface navigateur ;
+- les chemins critiques du frontend navigateur : chiffrement/dechiffrement local, compteur UTF-8, gestion du fragment et erreurs de lien.
 
 ## Lancer le service en local
 

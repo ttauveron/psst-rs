@@ -2,12 +2,14 @@ SHELL := /bin/bash
 MUSL_TARGET := x86_64-unknown-linux-musl
 MUSL_IMAGE := clux/muslrust:stable
 
-.PHONY: help test build-release build-release-alpine package-binary terraform-init terraform-plan terraform-apply terraform-output ansible-syntax ansible-deploy deploy deploy-no-terraform check-env check-cloudflare-env
+.PHONY: help test test-rust test-frontend build-release build-release-alpine package-binary terraform-init terraform-plan terraform-apply terraform-output ansible-syntax ansible-deploy deploy deploy-no-terraform check-env check-cloudflare-env
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
-		'  make test             - run Rust tests' \
+		'  make test             - run Rust and frontend tests' \
+		'  make test-rust        - run Rust tests' \
+		'  make test-frontend    - run frontend tests with node:test' \
 		'  make build-release    - build the release binary' \
 		'  make build-release-alpine - build an Alpine-compatible musl release binary via Docker' \
 		'  make package-binary   - copy the Alpine-compatible release binary into ansible/files/bin/psst-rs' \
@@ -22,6 +24,13 @@ help:
 
 test:
 	cargo test
+	node --test tests/frontend/*.test.mjs
+
+test-rust:
+	cargo test
+
+test-frontend:
+	node --test tests/frontend/*.test.mjs
 
 build-release:
 	cargo build --release

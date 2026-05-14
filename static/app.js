@@ -1,6 +1,7 @@
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 const AES_GCM_NONCE_BYTES = 12
+const AES_GCM_KEY_BYTES = 32
 let latestSecretReference = null
 let pendingTurnstileConfig = null
 
@@ -27,6 +28,64 @@ document.addEventListener("DOMContentLoaded", () => {
     })
   }
 })
+
+function getUtf8ByteLength(value) {
+  return textEncoder.encode(value).length
+}
+
+async function encryptPlaintext(plaintext) {
+  const plaintextBytes = textEncoder.encode(plaintext)
+  const key = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  )
+  const rawKey = new Uint8Array(await crypto.subtle.exportKey("raw", key))
+  const nonce = crypto.getRandomValues(new Uint8Array(AES_GCM_NONCE_BYTES))
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, plaintextBytes),
+  )
+
+  return { rawKey, nonce, ciphertext }
+}
+
+async function decryptCiphertext(rawKey, nonce, ciphertext) {
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    rawKey,
+    "AES-GCM",
+    false,
+    ["decrypt"],
+  )
+  const plaintextBuffer = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: nonce },
+    cryptoKey,
+    ciphertext,
+  )
+
+  return textDecoder.decode(plaintextBuffer)
+}
+
+function getFragmentKey(locationLike) {
+  return locationLike.hash.slice(1)
+}
+
+function decodeKeyFragment(rawKey) {
+  const keyBytes = base64UrlToBytes(rawKey)
+  if (keyBytes.length !== AES_GCM_KEY_BYTES) {
+    throw new Error("Invalid key length")
+  }
+
+  return keyBytes
+}
+
+function clearFragmentFromLocation(historyLike, locationLike) {
+  historyLike.replaceState(
+    null,
+    "",
+    `${locationLike.pathname}${locationLike.search}`,
+  )
+}
 
 async function bootCreatePage(root) {
   const form = document.getElementById("create-form")
@@ -117,16 +176,7 @@ async function bootCreatePage(root) {
     createButton.textContent = "Encrypting..."
 
     try {
-      const key = await crypto.subtle.generateKey(
-        { name: "AES-GCM", length: 256 },
-        true,
-        ["encrypt", "decrypt"],
-      )
-      const rawKey = new Uint8Array(await crypto.subtle.exportKey("raw", key))
-      const nonce = crypto.getRandomValues(new Uint8Array(AES_GCM_NONCE_BYTES))
-      const ciphertext = new Uint8Array(
-        await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, plaintextBytes),
-      )
+      const { rawKey, nonce, ciphertext } = await encryptPlaintext(plaintext)
 
       const response = await fetch("/api/create", {
         method: "POST",
@@ -334,7 +384,7 @@ async function bootReadPage(root) {
   const secretOutput = document.getElementById("secret-output")
 
   decryptButton.addEventListener("click", async () => {
-    const rawKey = window.location.hash.slice(1)
+    const rawKey = getFragmentKey(window.location)
 
     if (copyButton) {
       copyButton.hidden = true
@@ -353,14 +403,7 @@ async function bootReadPage(root) {
     decryptButton.textContent = "Decrypting..."
 
     try {
-      const cryptoKey = await crypto.subtle.importKey(
-        "raw",
-        base64UrlToBytes(rawKey),
-        "AES-GCM",
-        false,
-        ["decrypt"],
-      )
-
+      const keyBytes = decodeKeyFragment(rawKey)
       const response = await fetch(`/api/secrets/${encodeURIComponent(secretId)}`)
       const payload = await readJson(response)
 
@@ -368,18 +411,15 @@ async function bootReadPage(root) {
         throw new Error("Secret not found, expired, or already read.")
       }
 
-      const plaintextBuffer = await crypto.subtle.decrypt(
-        {
-          name: "AES-GCM",
-          iv: base64UrlToBytes(payload.nonce),
-        },
-        cryptoKey,
+      const plaintext = await decryptCiphertext(
+        keyBytes,
+        base64UrlToBytes(payload.nonce),
         base64UrlToBytes(payload.ciphertext),
       )
 
-      history.replaceState(null, "", `${window.location.pathname}${window.location.search}`)
+      clearFragmentFromLocation(history, window.location)
       secretOutput.hidden = false
-      secretOutput.textContent = textDecoder.decode(plaintextBuffer)
+      secretOutput.textContent = plaintext
       if (copyButton) {
         copyButton.hidden = false
       }
@@ -412,7 +452,7 @@ async function bootReadPage(root) {
 }
 
 function updateSecretSize(plaintext, maxSecretBytes) {
-  const currentBytes = textEncoder.encode(plaintext).length
+  const currentBytes = getUtf8ByteLength(plaintext)
   const sizeNode = document.getElementById("secret-size")
   sizeNode.textContent = String(currentBytes)
   sizeNode.parentElement.classList.toggle("over-limit", currentBytes > maxSecretBytes)
@@ -557,4 +597,31 @@ function base64UrlToBytes(value) {
   }
 
   return bytes
+}
+
+if (globalThis.__psstTestHooks) {
+  Object.assign(globalThis.__psstTestHooks, {
+    AES_GCM_NONCE_BYTES,
+    armTurnstileForNextSecret,
+    base64UrlToBytes,
+    bootCreatePage,
+    bootReadPage,
+    buildShareUrl,
+    bytesToBase64Url,
+    clearFragmentFromLocation,
+    createTurnstileState,
+    decodeKeyFragment,
+    decryptCiphertext,
+    encryptPlaintext,
+    getFragmentKey,
+    getUtf8ByteLength,
+    mapCreateErrorMessage,
+    mapDeleteErrorMessage,
+    mapReadErrorMessage,
+    renderTurnstileWidget,
+    resetTurnstile,
+    syncCreateButtonState,
+    updateSecretSize,
+    updateTurnstileToken,
+  })
 }

@@ -425,6 +425,18 @@ async fn log_request(request: Request, next: Next) -> Response<Body> {
     let status = response.status();
     let elapsed_ms = started_at.elapsed().as_millis();
 
+    log_request_completed(&method, &path, status, elapsed_ms, has_client_ip);
+
+    response
+}
+
+fn log_request_completed(
+    method: &axum::http::Method,
+    path: &str,
+    status: StatusCode,
+    elapsed_ms: u128,
+    has_client_ip: bool,
+) {
     info!(
         method = %method,
         path,
@@ -433,8 +445,6 @@ async fn log_request(request: Request, next: Next) -> Response<Body> {
         has_client_ip,
         "request completed"
     );
-
-    response
 }
 
 fn matched_path_or_uri(request: &Request) -> &str {
@@ -693,7 +703,11 @@ fn current_timestamp() -> Result<i64, ApiError> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        io,
+        sync::{Arc, Mutex},
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use axum::{
         Json,
@@ -705,8 +719,9 @@ mod tests {
     };
     use serde_json::Value;
     use tower::util::ServiceExt;
+    use tracing_subscriber::fmt::MakeWriter;
 
-    use super::{build_router, current_timestamp, matched_path_or_uri};
+    use super::{build_router, current_timestamp, log_request_completed, matched_path_or_uri};
     use crate::{
         config::AppConfig,
         db::{Database, NewSecretRecord},
@@ -1595,6 +1610,33 @@ mod tests {
     }
 
     #[test]
+    fn request_logs_do_not_include_sensitive_route_values_or_json_bodies() {
+        let log_buffer = SharedLogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .without_time()
+            .with_target(false)
+            .with_writer(log_buffer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        log_request_completed(
+            &Method::POST,
+            "/api/delete/{id}",
+            StatusCode::NOT_FOUND,
+            0,
+            false,
+        );
+
+        let output = log_buffer.contents();
+        assert!(output.contains("request completed"));
+        assert!(output.contains("path=\"/api/delete/{id}\""));
+        assert!(!output.contains("secret-id-sensitive"));
+        assert!(!output.contains("sensitive-token"));
+        assert!(!output.contains("plaintext-secret"));
+    }
+
+    #[test]
     fn unmatched_requests_do_not_log_raw_uri_paths() {
         let request = Request::builder()
             .uri("/s/some-secret-id")
@@ -1717,5 +1759,50 @@ mod tests {
             .expect("secret insertion should succeed");
 
         generated
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedLogBuffer {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl SharedLogBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(
+                self.bytes
+                    .lock()
+                    .expect("log buffer lock should succeed")
+                    .clone(),
+            )
+            .expect("log buffer should contain utf-8")
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedLogBuffer {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedLogWriter {
+                bytes: Arc::clone(&self.bytes),
+            }
+        }
+    }
+
+    struct SharedLogWriter {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl io::Write for SharedLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes
+                .lock()
+                .expect("log buffer lock should succeed")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 }
