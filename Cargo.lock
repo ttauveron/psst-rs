@@ -437,6 +437,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

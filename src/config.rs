@@ -88,6 +88,21 @@ impl AppConfig {
     }
 }
 
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            bind_addr: DEFAULT_BIND_ADDR.parse().expect("default bind addr should parse"),
+            database_path: PathBuf::from(DEFAULT_DATABASE_PATH),
+            public_base_url: DEFAULT_PUBLIC_BASE_URL.to_owned(),
+            max_secret_bytes: DEFAULT_MAX_SECRET_BYTES,
+            max_ciphertext_bytes: DEFAULT_MAX_CIPHERTEXT_BYTES,
+            default_ttl_seconds: DEFAULT_DEFAULT_TTL_SECONDS,
+            max_ttl_seconds: DEFAULT_MAX_TTL_SECONDS,
+            enable_create: DEFAULT_ENABLE_CREATE,
+        }
+    }
+}
+
 fn env_or_string(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_owned())
 }
@@ -108,6 +123,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
     use super::AppConfig;
 
     #[test]
@@ -117,5 +134,19 @@ mod tests {
         assert_eq!(config.bind_addr.to_string(), "127.0.0.1:3000");
         assert_eq!(config.max_secret_bytes, 16 * 1024);
         assert!(config.enable_create);
+    }
+
+    #[test]
+    fn rejects_non_loopback_bind_address() {
+        let mut config = AppConfig::default();
+        config.bind_addr = SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 3000));
+
+        let error = config.validate().expect_err("config should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("SECRET_RS_BIND_ADDR must bind to a loopback address")
+        );
     }
 }

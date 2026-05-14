@@ -1,5 +1,6 @@
 mod config;
 mod http;
+mod request_context;
 
 use anyhow::Result;
 use tracing::info;
@@ -21,7 +22,7 @@ async fn main() -> Result<()> {
         "starting secret-rs"
     );
 
-    axum::serve(listener, build_router()).await?;
+    axum::serve(listener, build_router(config.clone())).await?;
     Ok(())
 }
 
