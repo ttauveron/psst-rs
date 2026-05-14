@@ -14,4 +14,15 @@ tofu init
 tofu plan
 ```
 
-Quand on ajoutera les regles inbound/outbound, il sera preferable de basculer vers un security group dedie plutot que de modifier le security group par defaut du projet.
+## Reseau Cloudflare
+
+Les CIDR IPv6 Cloudflare ne sont plus codes en dur. Terraform les recupere depuis l'API officielle Cloudflare:
+
+- `https://api.cloudflare.com/client/v4/ips`
+
+Cloudflare documente aussi la liste et son endpoint ici:
+
+- `https://www.cloudflare.com/ips-v6/`
+- `https://developers.cloudflare.com/api/resources/ips/`
+
+Effet pratique: au prochain `tofu plan` ou `tofu apply`, si Cloudflare publie un changement de ranges IPv6, Terraform detectera le diff et proposera la mise a jour du security group.
