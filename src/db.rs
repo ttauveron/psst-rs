@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
 use crate::config::AppConfig;
 
@@ -112,6 +112,168 @@ impl Database {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretRecord {
+    pub id: String,
+    pub ciphertext: String,
+    pub nonce: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub consumed_at: Option<i64>,
+    pub delete_token_hash: String,
+    pub size_bytes: u64,
+    pub requester_ip_hash: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewSecretRecord {
+    pub id: String,
+    pub ciphertext: String,
+    pub nonce: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub delete_token_hash: String,
+    pub size_bytes: u64,
+    pub requester_ip_hash: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct SecretStore {
+    database: Database,
+}
+
+#[allow(dead_code)]
+impl SecretStore {
+    pub fn new(database: Database) -> Self {
+        Self { database }
+    }
+
+    pub fn insert_secret(&self, secret: &NewSecretRecord) -> Result<()> {
+        let connection = self.database.open_connection()?;
+        connection
+            .execute(
+                "INSERT INTO secrets (
+                    id,
+                    ciphertext,
+                    nonce,
+                    created_at,
+                    expires_at,
+                    consumed_at,
+                    delete_token_hash,
+                    size_bytes,
+                    requester_ip_hash
+                ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8)",
+                params![
+                    &secret.id,
+                    &secret.ciphertext,
+                    &secret.nonce,
+                    secret.created_at,
+                    secret.expires_at,
+                    &secret.delete_token_hash,
+                    i64::try_from(secret.size_bytes).context("secret size exceeds SQLite integer range")?,
+                    &secret.requester_ip_hash,
+                ],
+            )
+            .context("failed to insert secret record")?;
+
+        Ok(())
+    }
+
+    pub fn get_secret_by_id(&self, secret_id: &str) -> Result<Option<SecretRecord>> {
+        let connection = self.database.open_connection()?;
+        connection
+            .query_row(
+                "SELECT
+                    id,
+                    ciphertext,
+                    nonce,
+                    created_at,
+                    expires_at,
+                    consumed_at,
+                    delete_token_hash,
+                    size_bytes,
+                    requester_ip_hash
+                 FROM secrets
+                 WHERE id = ?1",
+                [secret_id],
+                map_secret_row,
+            )
+            .optional()
+            .context("failed to load secret record")
+    }
+
+    pub fn delete_secret_by_id_and_token_hash(
+        &self,
+        secret_id: &str,
+        delete_token_hash: &str,
+    ) -> Result<bool> {
+        let connection = self.database.open_connection()?;
+        let deleted_rows = connection
+            .execute(
+                "DELETE FROM secrets
+                 WHERE id = ?1 AND delete_token_hash = ?2",
+                [secret_id, delete_token_hash],
+            )
+            .context("failed to delete secret record")?;
+
+        Ok(deleted_rows == 1)
+    }
+
+    pub fn delete_expired_secrets(&self, now_timestamp: i64) -> Result<usize> {
+        let connection = self.database.open_connection()?;
+        connection
+            .execute(
+                "DELETE FROM secrets
+                 WHERE expires_at <= ?1",
+                [now_timestamp],
+            )
+            .context("failed to purge expired secrets")
+    }
+
+    pub fn with_immediate_transaction<T, F>(&self, operation: F) -> Result<T>
+    where
+        F: FnOnce(&Connection) -> Result<T>,
+    {
+        let mut connection = self.database.open_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("failed to open immediate SQLite transaction")?;
+
+        let result = operation(&transaction)?;
+        transaction
+            .commit()
+            .context("failed to commit SQLite transaction")?;
+
+        Ok(result)
+    }
+}
+
+#[allow(dead_code)]
+fn map_secret_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SecretRecord> {
+    let size_bytes: i64 = row.get(7)?;
+
+    Ok(SecretRecord {
+        id: row.get(0)?,
+        ciphertext: row.get(1)?,
+        nonce: row.get(2)?,
+        created_at: row.get(3)?,
+        expires_at: row.get(4)?,
+        consumed_at: row.get(5)?,
+        delete_token_hash: row.get(6)?,
+        size_bytes: u64::try_from(size_bytes).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                7,
+                rusqlite::types::Type::Integer,
+                Box::new(error),
+            )
+        })?,
+        requester_ip_hash: row.get(8)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -119,9 +281,11 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    use anyhow::Context;
     use rusqlite::Connection;
+    use rusqlite::params;
 
-    use super::Database;
+    use super::{Database, NewSecretRecord, SecretStore};
     use crate::config::AppConfig;
 
     #[test]
@@ -234,6 +398,149 @@ mod tests {
         cleanup_temp_dir(&temp_root);
     }
 
+    #[test]
+    fn secret_store_can_insert_and_fetch_secret() {
+        let (temp_root, store) = setup_secret_store("secret-store-insert");
+        let new_secret = sample_secret("secret-1", 1_700_000_000, 1_700_086_400);
+
+        store
+            .insert_secret(&new_secret)
+            .expect("secret insertion should succeed");
+
+        let stored = store
+            .get_secret_by_id(&new_secret.id)
+            .expect("secret lookup should succeed")
+            .expect("secret should exist");
+
+        assert_eq!(stored.id, new_secret.id);
+        assert_eq!(stored.ciphertext, new_secret.ciphertext);
+        assert_eq!(stored.nonce, new_secret.nonce);
+        assert_eq!(stored.created_at, new_secret.created_at);
+        assert_eq!(stored.expires_at, new_secret.expires_at);
+        assert_eq!(stored.consumed_at, None);
+        assert_eq!(stored.delete_token_hash, new_secret.delete_token_hash);
+        assert_eq!(stored.size_bytes, new_secret.size_bytes);
+        assert_eq!(stored.requester_ip_hash, new_secret.requester_ip_hash);
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
+    fn secret_store_deletes_only_matching_delete_token_hash() {
+        let (temp_root, store) = setup_secret_store("secret-store-delete");
+        let new_secret = sample_secret("secret-2", 1_700_000_000, 1_700_086_400);
+
+        store
+            .insert_secret(&new_secret)
+            .expect("secret insertion should succeed");
+
+        let deleted = store
+            .delete_secret_by_id_and_token_hash(&new_secret.id, "wrong-hash")
+            .expect("delete with wrong hash should not fail");
+        assert!(!deleted);
+        assert!(
+            store
+                .get_secret_by_id(&new_secret.id)
+                .expect("secret lookup should succeed")
+                .is_some()
+        );
+
+        let deleted = store
+            .delete_secret_by_id_and_token_hash(&new_secret.id, &new_secret.delete_token_hash)
+            .expect("delete with matching hash should succeed");
+        assert!(deleted);
+        assert!(
+            store
+                .get_secret_by_id(&new_secret.id)
+                .expect("secret lookup should succeed")
+                .is_none()
+        );
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
+    fn secret_store_can_purge_expired_secrets() {
+        let (temp_root, store) = setup_secret_store("secret-store-purge");
+        let expired_secret = sample_secret("secret-expired", 1_700_000_000, 100);
+        let active_secret = sample_secret("secret-active", 1_700_000_000, 10_000);
+
+        store
+            .insert_secret(&expired_secret)
+            .expect("expired secret insertion should succeed");
+        store
+            .insert_secret(&active_secret)
+            .expect("active secret insertion should succeed");
+
+        let deleted_rows = store
+            .delete_expired_secrets(500)
+            .expect("purge should succeed");
+
+        assert_eq!(deleted_rows, 1);
+        assert!(
+            store
+                .get_secret_by_id(&expired_secret.id)
+                .expect("expired secret lookup should succeed")
+                .is_none()
+        );
+        assert!(
+            store
+                .get_secret_by_id(&active_secret.id)
+                .expect("active secret lookup should succeed")
+                .is_some()
+        );
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
+    fn secret_store_supports_immediate_transactions() {
+        let (temp_root, store) = setup_secret_store("secret-store-tx");
+        let new_secret = sample_secret("secret-3", 1_700_000_000, 1_700_086_400);
+
+        store
+            .with_immediate_transaction(|connection| {
+                connection
+                    .execute(
+                        "INSERT INTO secrets (
+                            id,
+                            ciphertext,
+                            nonce,
+                            created_at,
+                            expires_at,
+                            consumed_at,
+                            delete_token_hash,
+                            size_bytes,
+                            requester_ip_hash
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8)",
+                        params![
+                            &new_secret.id,
+                            &new_secret.ciphertext,
+                            &new_secret.nonce,
+                            new_secret.created_at,
+                            new_secret.expires_at,
+                            &new_secret.delete_token_hash,
+                            i64::try_from(new_secret.size_bytes)
+                                .context("secret size should fit SQLite integer")?,
+                            &new_secret.requester_ip_hash,
+                        ],
+                    )
+                    .context("insert in transaction should succeed")?;
+
+                Ok(())
+            })
+            .expect("immediate transaction should commit");
+
+        assert!(
+            store
+                .get_secret_by_id(&new_secret.id)
+                .expect("secret lookup should succeed")
+                .is_some()
+        );
+
+        cleanup_temp_dir(&temp_root);
+    }
+
     fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -245,6 +552,32 @@ mod tests {
 
     fn cleanup_temp_dir(path: &std::path::Path) {
         let _ = fs::remove_dir_all(path);
+    }
+
+    fn setup_secret_store(prefix: &str) -> (std::path::PathBuf, SecretStore) {
+        let mut config = AppConfig::default();
+        let temp_root = unique_temp_dir(prefix);
+        config.database_path = temp_root.join("secrets.db");
+
+        let database = Database::connect(&config).expect("database should open");
+        database
+            .initialize_schema()
+            .expect("schema initialization should succeed");
+
+        (temp_root, SecretStore::new(database))
+    }
+
+    fn sample_secret(id: &str, created_at: i64, expires_at: i64) -> NewSecretRecord {
+        NewSecretRecord {
+            id: id.to_owned(),
+            ciphertext: "ciphertext".to_owned(),
+            nonce: "nonce".to_owned(),
+            created_at,
+            expires_at,
+            delete_token_hash: "delete-token-hash".to_owned(),
+            size_bytes: 10,
+            requester_ip_hash: Some("ip-hash".to_owned()),
+        }
     }
 
     fn schema_object_exists(connection: &Connection, object_type: &str, name: &str) -> bool {
