@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod http;
+mod rate_limit;
 mod request_context;
 mod secret;
 

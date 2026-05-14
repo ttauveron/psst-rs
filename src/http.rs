@@ -32,6 +32,7 @@ use tracing::info;
 use crate::{
     config::AppConfig,
     db::{ActiveSecretStats, Database, NewSecretRecord, SecretStore},
+    rate_limit::RateLimitBucket,
     request_context::ClientIp,
     secret::{
         ALLOWED_TTL_SECONDS, CreateSecretRequest, CreateSecretResponse, DeleteSecretRequest,
@@ -548,8 +549,9 @@ fn check_create_rate_limit_hook(
         return Ok(());
     };
 
-    let minute_bucket = now_timestamp.div_euclid(60);
-    let minute_key = format!("create-minute:{requester_ip_hash}");
+    let minute_bucket_kind = RateLimitBucket::CreateMinute;
+    let minute_bucket = minute_bucket_kind.bucket_for_timestamp(now_timestamp);
+    let minute_key = minute_bucket_kind.key(requester_ip_hash);
     let minute_count = state
         .secret_store
         .increment_rate_limit_counter(&minute_key, minute_bucket)
@@ -559,8 +561,9 @@ fn check_create_rate_limit_hook(
         return Err(ApiError::too_many_requests());
     }
 
-    let hour_bucket = now_timestamp.div_euclid(60 * 60);
-    let hour_key = format!("create-hour:{requester_ip_hash}");
+    let hour_bucket_kind = RateLimitBucket::CreateHour;
+    let hour_bucket = hour_bucket_kind.bucket_for_timestamp(now_timestamp);
+    let hour_key = hour_bucket_kind.key(requester_ip_hash);
     let hour_count = state
         .secret_store
         .increment_rate_limit_counter(&hour_key, hour_bucket)
@@ -582,8 +585,9 @@ fn check_read_rate_limit(
         return Ok(());
     };
 
-    let minute_bucket = now_timestamp.div_euclid(60);
-    let minute_key = format!("read-minute:{requester_ip_hash}");
+    let minute_bucket_kind = RateLimitBucket::ReadMinute;
+    let minute_bucket = minute_bucket_kind.bucket_for_timestamp(now_timestamp);
+    let minute_key = minute_bucket_kind.key(requester_ip_hash);
     let minute_count = state
         .secret_store
         .increment_rate_limit_counter(&minute_key, minute_bucket)
