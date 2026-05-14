@@ -180,48 +180,64 @@ async function bootCreatePage(root) {
 }
 
 async function bootReadPage(root) {
-  const rawKey = window.location.hash.slice(1)
   const secretId = root.dataset.secretId
+  const decryptButton = document.getElementById("decrypt-secret-button")
+  const secretOutput = document.getElementById("secret-output")
 
-  if (!rawKey) {
-    setText("read-status", "Lien incomplet : cle manquante.")
-    return
-  }
+  decryptButton.addEventListener("click", async () => {
+    const rawKey = window.location.hash.slice(1)
 
-  try {
-    const response = await fetch(`/api/secrets/${encodeURIComponent(secretId)}`)
-    const payload = await readJson(response)
+    secretOutput.hidden = true
+    secretOutput.textContent = ""
+    setText("read-status", "")
 
-    if (!response.ok) {
-      throw new Error("Secret introuvable, expire ou deja lu.")
+    if (!rawKey) {
+      setText("read-status", "Lien incomplet : cle manquante.")
+      return
     }
 
-    const cryptoKey = await crypto.subtle.importKey(
-      "raw",
-      base64UrlToBytes(rawKey),
-      "AES-GCM",
-      false,
-      ["decrypt"],
-    )
+    decryptButton.disabled = true
+    decryptButton.textContent = "Dechiffrement..."
 
-    const plaintextBuffer = await crypto.subtle.decrypt(
-      {
-        name: "AES-GCM",
-        iv: base64UrlToBytes(payload.nonce),
-      },
-      cryptoKey,
-      base64UrlToBytes(payload.ciphertext),
-    )
+    try {
+      const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        base64UrlToBytes(rawKey),
+        "AES-GCM",
+        false,
+        ["decrypt"],
+      )
 
-    history.replaceState(null, "", `${window.location.pathname}${window.location.search}`)
-    document.getElementById("secret-output").hidden = false
-    document.getElementById("secret-output").textContent = textDecoder.decode(plaintextBuffer)
-    setText("read-status", "Secret dechiffre localement. Le fragment a ete efface de l'URL.")
-  } catch (error) {
-    document.getElementById("secret-output").hidden = true
-    document.getElementById("secret-output").textContent = ""
-    setText("read-status", mapReadErrorMessage(error))
-  }
+      const response = await fetch(`/api/secrets/${encodeURIComponent(secretId)}`)
+      const payload = await readJson(response)
+
+      if (!response.ok) {
+        throw new Error("Secret introuvable, expire ou deja lu.")
+      }
+
+      const plaintextBuffer = await crypto.subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv: base64UrlToBytes(payload.nonce),
+        },
+        cryptoKey,
+        base64UrlToBytes(payload.ciphertext),
+      )
+
+      history.replaceState(null, "", `${window.location.pathname}${window.location.search}`)
+      secretOutput.hidden = false
+      secretOutput.textContent = textDecoder.decode(plaintextBuffer)
+      setText("read-status", "Secret dechiffre localement. Le fragment a ete efface de l'URL.")
+      decryptButton.disabled = true
+      decryptButton.textContent = "Secret deja lu"
+      return
+    } catch (error) {
+      setText("read-status", mapReadErrorMessage(error))
+    }
+
+    decryptButton.disabled = false
+    decryptButton.textContent = "Dechiffrer le secret"
+  })
 }
 
 function updateSecretSize(plaintext, maxSecretBytes) {
@@ -274,6 +290,10 @@ function mapReadErrorMessage(error) {
 
   if (message.includes("introuvable") || message.includes("expire") || message.includes("deja lu")) {
     return "Secret introuvable, expire ou deja lu."
+  }
+
+  if (message.includes("Invalid key length") || message.includes("DataError")) {
+    return "Cle invalide ou mal formee. Verifiez le lien complet avant de relancer la lecture."
   }
 
   if (message.includes("decrypt") || message.includes("dechiffrer") || message.includes("OperationError")) {

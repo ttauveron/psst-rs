@@ -381,7 +381,10 @@ fn render_read_page(secret_id: &str) -> String {
       </header>
 
       <section class="panel">
-        <p class="status" id="read-status" role="status" aria-live="polite">Recuperation du secret...</p>
+        <p class="status" id="read-status" role="status" aria-live="polite">Cliquez pour dechiffrer le secret. La lecture reussie le supprimera du serveur.</p>
+        <div class="actions">
+          <button id="decrypt-secret-button" type="button">Dechiffrer le secret</button>
+        </div>
         <pre id="secret-output" hidden></pre>
       </section>
 
@@ -707,7 +710,8 @@ mod tests {
 
         assert!(html.contains(r#"id="read-app""#));
         assert!(html.contains(r#"data-secret-id="test-secret-id""#));
-        assert!(html.contains("Recuperation du secret..."));
+        assert!(html.contains("Cliquez pour dechiffrer le secret"));
+        assert!(html.contains(r#"id="decrypt-secret-button""#));
         assert!(html.contains(r#"src="/static/app.js""#));
         assert!(html.contains("Si la cle du fragment manque ou est incorrecte"));
     }
