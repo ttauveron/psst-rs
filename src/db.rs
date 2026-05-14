@@ -338,13 +338,18 @@ impl SecretStore {
         })
     }
 
-    pub fn delete_rate_limit_buckets_before(&self, cutoff_bucket: i64) -> Result<usize> {
+    pub fn delete_rate_limit_buckets_before(
+        &self,
+        key_prefix: &str,
+        cutoff_bucket: i64,
+    ) -> Result<usize> {
         let connection = self.database.open_connection()?;
         connection
             .execute(
                 "DELETE FROM rate_limits
-                 WHERE bucket < ?1",
-                [cutoff_bucket],
+                 WHERE key LIKE ?1
+                   AND bucket < ?2",
+                params![format!("{key_prefix}:%"), cutoff_bucket],
             )
             .context("failed to purge old rate limit buckets")
     }
@@ -451,7 +456,7 @@ mod tests {
     use rusqlite::params;
 
     use super::{ActiveSecretStats, Database, NewSecretRecord, SecretStore};
-    use crate::config::AppConfig;
+    use crate::{config::AppConfig, rate_limit::RateLimitBucket};
 
     #[test]
     fn connect_creates_parent_directory_and_opens_database() {
@@ -771,10 +776,10 @@ mod tests {
             .expect("other old bucket insert should succeed");
 
         let deleted = store
-            .delete_rate_limit_buckets_before(20)
+            .delete_rate_limit_buckets_before(RateLimitBucket::CreateMinute.key_prefix(), 20)
             .expect("bucket purge should succeed");
 
-        assert_eq!(deleted, 2);
+        assert_eq!(deleted, 1);
         assert_eq!(
             store
                 .rate_limit_count("create-minute:ip-hash", 10)
@@ -784,14 +789,26 @@ mod tests {
         assert_eq!(
             store
                 .rate_limit_count("read-minute:ip-hash", 5)
-                .expect("other old bucket should load"),
-            0
+                .expect("other prefix bucket should remain"),
+            1
         );
         assert_eq!(
             store
                 .rate_limit_count("create-minute:ip-hash", 20)
                 .expect("new bucket should remain"),
             1
+        );
+
+        let deleted = store
+            .delete_rate_limit_buckets_before(RateLimitBucket::ReadMinute.key_prefix(), 20)
+            .expect("second bucket purge should succeed");
+
+        assert_eq!(deleted, 1);
+        assert_eq!(
+            store
+                .rate_limit_count("read-minute:ip-hash", 5)
+                .expect("other old bucket should now be gone"),
+            0
         );
 
         cleanup_temp_dir(&temp_root);
