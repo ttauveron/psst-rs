@@ -162,6 +162,31 @@
           group: nginx
           mode: "0750"
 
+    - name: Ensure SQLite database file ownership is correct
+      ansible.builtin.file:
+        path: "{{ psst_database_path }}"
+        state: touch
+        owner: "{{ psst_app_user }}"
+        group: "{{ psst_app_group }}"
+        mode: "0640"
+
+    - name: Find SQLite sidecar files
+      ansible.builtin.find:
+        paths: "{{ psst_data_dir }}"
+        patterns:
+          - "{{ psst_database_path | basename }}-wal"
+          - "{{ psst_database_path | basename }}-shm"
+        file_type: file
+      register: psst_sqlite_sidecars
+
+    - name: Ensure SQLite sidecar file ownership is correct
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        owner: "{{ psst_app_user }}"
+        group: "{{ psst_app_group }}"
+        mode: "0640"
+      loop: "{{ psst_sqlite_sidecars.files }}"
+
     - name: Remove default nginx virtual host when present
       ansible.builtin.file:
         path: "/etc/nginx/http.d/default.conf"
