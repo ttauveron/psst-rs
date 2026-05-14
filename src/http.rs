@@ -3,7 +3,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{ConnectInfo, DefaultBodyLimit, MatchedPath, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, MatchedPath, Path, Request, State},
     http::{
         HeaderValue, Response, StatusCode,
         header::{CONTENT_SECURITY_POLICY, HeaderName, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS},
@@ -19,7 +19,8 @@ use crate::{
     db::{Database, NewSecretRecord, SecretStore},
     request_context::ClientIp,
     secret::{
-        CreateSecretRequest, CreateSecretResponse, generate_secret_reference, is_allowed_ttl,
+        CreateSecretRequest, CreateSecretResponse, ReadSecretResponse, generate_secret_reference,
+        is_allowed_ttl,
     },
 };
 
@@ -48,6 +49,7 @@ struct ErrorResponse {
     error: String,
 }
 
+#[derive(Debug)]
 struct ApiError {
     status: StatusCode,
     message: String,
@@ -99,6 +101,7 @@ pub fn build_router(config: AppConfig, database: Database) -> Router {
         .route("/about", get(about))
         .route("/healthz", get(healthz))
         .route("/api/create", post(create_secret_stub))
+        .route("/api/secrets/{id}", get(read_secret))
         .with_state(app_state)
         .layer(DefaultBodyLimit::max(max_json_body_bytes))
         .layer(middleware::from_fn(log_request))
@@ -190,6 +193,29 @@ async fn create_secret_stub(
     Ok(Json(CreateSecretResponse {
         id: generated.secret_id,
         delete_token: generated.delete_token,
+    }))
+}
+
+async fn read_secret(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    Path(secret_id): Path<String>,
+) -> Result<Json<ReadSecretResponse>, ApiError> {
+    let now_timestamp = current_timestamp()?;
+    let secret = state
+        .secret_store
+        .consume_unexpired_secret_by_id(&secret_id, now_timestamp)
+        .map_err(|error| ApiError::internal(format!("failed to load secret: {error}")))?;
+
+    let Some(secret) = secret else {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "secret not found".to_owned(),
+        });
+    };
+
+    Ok(Json(ReadSecretResponse {
+        ciphertext: secret.ciphertext,
+        nonce: secret.nonce,
     }))
 }
 
@@ -320,8 +346,12 @@ mod tests {
     use serde_json::Value;
     use tower::util::ServiceExt;
 
-    use super::{build_router, matched_path_or_uri};
-    use crate::{config::AppConfig, db::Database, secret::hash_delete_token};
+    use super::{build_router, current_timestamp, matched_path_or_uri};
+    use crate::{
+        config::AppConfig,
+        db::{Database, NewSecretRecord},
+        secret::{generate_secret_reference, hash_delete_token},
+    };
 
     #[tokio::test]
     async fn html_routes_include_security_headers() {
@@ -492,6 +522,132 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    #[tokio::test]
+    async fn read_route_returns_secret_and_consumes_it() {
+        let (_guard, app, database) = test_router("read-success", AppConfig::default());
+        let secret_id = insert_test_secret(
+            &database,
+            "ciphertext-read",
+            "nonce-read",
+            current_timestamp().expect("current timestamp should exist") + 3600,
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/secrets/{secret_id}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let json: Value = serde_json::from_slice(&body).expect("body should be JSON");
+
+        assert_eq!(
+            json.get("ciphertext").and_then(Value::as_str),
+            Some("ciphertext-read")
+        );
+        assert_eq!(json.get("nonce").and_then(Value::as_str), Some("nonce-read"));
+
+        let connection = database
+            .open_connection()
+            .expect("database connection should open");
+        let remaining: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM secrets WHERE id = ?1",
+                [secret_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("count query should succeed");
+
+        assert_eq!(remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn read_route_returns_404_on_second_read() {
+        let (_guard, app, database) = test_router("read-twice", AppConfig::default());
+        let secret_id = insert_test_secret(
+            &database,
+            "ciphertext-read-twice",
+            "nonce-read-twice",
+            current_timestamp().expect("current timestamp should exist") + 3600,
+        );
+
+        let first_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/secrets/{secret_id}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        let second_response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/secrets/{secret_id}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(first_response.status(), StatusCode::OK);
+        assert_eq!(second_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn read_route_returns_404_for_expired_secret() {
+        let (_guard, app, database) = test_router("read-expired", AppConfig::default());
+        let secret_id = insert_test_secret(
+            &database,
+            "ciphertext-expired",
+            "nonce-expired",
+            current_timestamp().expect("current timestamp should exist") - 1,
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/secrets/{secret_id}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn read_route_returns_404_for_unknown_secret() {
+        let (_guard, app, _database) = test_router("read-missing", AppConfig::default());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/secrets/does-not-exist")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
     #[test]
     fn unmatched_requests_do_not_log_raw_uri_paths() {
         let request = Request::builder()
@@ -532,4 +688,30 @@ mod tests {
     }
 
     struct TestTempDirGuard(std::path::PathBuf);
+
+    fn insert_test_secret(
+        database: &Database,
+        ciphertext: &str,
+        nonce: &str,
+        expires_at: i64,
+    ) -> String {
+        let store = crate::db::SecretStore::new(database.clone());
+        let generated = generate_secret_reference();
+        let now_timestamp = current_timestamp().expect("current timestamp should exist");
+
+        store
+            .insert_secret(&NewSecretRecord {
+                id: generated.secret_id.clone(),
+                ciphertext: ciphertext.to_owned(),
+                nonce: nonce.to_owned(),
+                created_at: now_timestamp,
+                expires_at,
+                delete_token_hash: hash_delete_token(&generated.delete_token),
+                size_bytes: u64::try_from(ciphertext.len()).expect("ciphertext len should fit"),
+                requester_ip_hash: None,
+            })
+            .expect("secret insertion should succeed");
+
+        generated.secret_id
+    }
 }
