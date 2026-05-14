@@ -89,7 +89,7 @@ Disposer d’une couche de persistence simple et robuste.
 #### 3.2 — Initialiser le schéma au démarrage
 
 * Créer le schéma au boot si la base est vide.
-* Ajouter les tables `secrets`, `abuse_reports`, `rate_limits`.
+* Ajouter les tables `secrets` et `rate_limits`.
 * Ajouter les index nécessaires à l’expiration et à la consommation.
 * Faire de l’initialisation une opération idempotente.
 
@@ -259,7 +259,7 @@ Rendre le flux de création/lecture utilisable sans sacrifier la simplicité.
 * Afficher le lien complet après création.
 * Ajouter le bouton “Copier”.
 * Ajouter le bouton “Supprimer maintenant”.
-* Ajouter les pages `GET /about` et `GET /abuse`.
+* Ajouter la page `GET /about`.
 * Ajouter les messages d’erreur attendus : clé absente, secret introuvable, création désactivée, etc.
 
 **Terminé quand**
@@ -281,9 +281,7 @@ Bloquer les abus évidents avant ouverture publique.
 * Implémenter une limite de création par minute par IP hashée.
 * Implémenter une limite de création par heure par IP hashée.
 * Implémenter une limite de lecture souple par IP hashée.
-* Implémenter une limite de signalement par IP hashée.
 * Implémenter des quotas globaux en nombre de secrets actifs et en volume total.
-* Implémenter `POST /api/report`.
 * Ajouter un mode `SECRET_RS_ENABLE_CREATE=false`.
 
 **Terminé quand**
@@ -302,7 +300,7 @@ Bloquer les abus évidents avant ouverture publique.
 
 * Ajouter une purge au démarrage.
 * Ajouter un job périodique interne.
-* Supprimer secrets expirés, secrets consommés, vieux buckets de rate limit, vieux reports selon politique.
+* Supprimer secrets expirés, secrets consommés et vieux buckets de rate limit.
 * Mesurer les compteurs globaux à partir de la base.
 
 **Terminé quand**

@@ -15,6 +15,7 @@ async fn main() -> Result<()> {
 
     let config = AppConfig::from_env()?;
     let database = Database::connect(&config)?;
+    database.initialize_schema()?;
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
 
     info!(

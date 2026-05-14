@@ -191,12 +191,7 @@ Page courte expliquant :
 * lecture unique ;
 * expiration ;
 * absence de récupération possible ;
-* limites ;
-* contact abuse.
-
-#### `GET /abuse`
-
-Page indiquant comment signaler un lien abusif.
+* limites.
 
 ### 8.2 API
 
@@ -290,23 +285,6 @@ Réponse :
 }
 ```
 
-#### `POST /api/report`
-
-Signale un secret ou une URL.
-
-Requête JSON :
-
-```json
-{
-  "url_or_id": "https://example.tld/s/...",
-  "reason": "phishing"
-}
-```
-
-Comportement minimal : stocker le signalement sans contenu sensible et/ou supprimer directement le secret si l’ID est valide, selon configuration.
-
-Cette route doit être rate-limitée.
-
 #### `GET /healthz`
 
 Retourne `200 OK` si le service est vivant.
@@ -333,14 +311,6 @@ ON secrets(expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_secrets_consumed_at
 ON secrets(consumed_at);
-
-CREATE TABLE IF NOT EXISTS abuse_reports (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  secret_id TEXT,
-  reason TEXT,
-  created_at INTEGER NOT NULL,
-  reporter_ip_hash TEXT
-);
 
 CREATE TABLE IF NOT EXISTS rate_limits (
   key TEXT NOT NULL,
@@ -407,7 +377,6 @@ Processus de lecture :
 Protéger au minimum :
 
 * `POST /api/create` ;
-* `POST /api/report` ;
 * éventuellement `GET /api/secrets/:id` en cas d’abus.
 
 Actions recommandées : managed challenge, block temporaire ou throttle selon les capacités disponibles.
@@ -420,7 +389,6 @@ Règles initiales proposées :
 
 * création : 5 par minute par IP hashée ;
 * création : 30 par heure par IP hashée ;
-* report : 5 par heure par IP hashée ;
 * lecture : limite souple, par exemple 60 par minute par IP hashée ;
 * stockage global : 50 MiB maximum ;
 * secrets actifs globaux : 10 000 maximum.
@@ -433,8 +401,7 @@ Un job périodique interne doit supprimer :
 
 * secrets expirés ;
 * secrets consommés depuis plus de quelques minutes ;
-* vieux enregistrements de rate limit ;
-* vieux signalements si configuré.
+* vieux enregistrements de rate limit.
 
 Fréquence recommandée : toutes les 5 minutes.
 
@@ -458,7 +425,6 @@ SECRET_RS_IP_HASH_SALT=...
 SECRET_RS_GLOBAL_MAX_ACTIVE_SECRETS=10000
 SECRET_RS_GLOBAL_MAX_STORAGE_BYTES=52428800
 SECRET_RS_ENABLE_CREATE=true
-SECRET_RS_ABUSE_EMAIL=abuse@example.tld
 ```
 
 Si `SECRET_RS_ENABLE_CREATE=false`, la page de création doit afficher que la création est temporairement désactivée et `POST /api/create` doit retourner 503.
@@ -565,7 +531,6 @@ Règles recommandées :
 
 * challenge ou protection renforcée sur `POST /api/create` ;
 * rate limit sur `POST /api/create` ;
-* rate limit sur `POST /api/report` ;
 * blocage des méthodes HTTP non utilisées ;
 * challenge sur trafic suspect.
 
@@ -670,7 +635,6 @@ La v1 est acceptable si :
 * Supprimer physiquement le secret dès lecture ou marquer `consumed_at` puis purger quelques minutes plus tard.
 * Autoriser l’expiration 30 jours par défaut dans l’UI ou la placer derrière une option avancée.
 * Stocker ou non des IP hashées pour le rate limiting persistant.
-* Supprimer automatiquement un secret signalé ou seulement enregistrer le signalement.
 
 ## 24. Recommandation v1
 

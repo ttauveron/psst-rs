@@ -54,7 +54,6 @@ pub fn build_router(config: AppConfig) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/about", get(about))
-        .route("/abuse", get(abuse))
         .route("/healthz", get(healthz))
         .route("/api/create", post(create_secret_stub))
         .with_state(app_state)
@@ -96,25 +95,6 @@ async fn about() -> Html<&'static str> {
     <main>
       <h1>A propos</h1>
       <p>Les secrets seront chiffres dans le navigateur et lus une seule fois.</p>
-    </main>
-  </body>
-</html>"#,
-    )
-}
-
-async fn abuse() -> Html<&'static str> {
-    Html(
-        r#"<!doctype html>
-<html lang="fr">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Abuse</title>
-  </head>
-  <body>
-    <main>
-      <h1>Abuse</h1>
-      <p>Cette page servira au signalement des liens abusifs.</p>
     </main>
   </body>
 </html>"#,
