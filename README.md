@@ -1,6 +1,6 @@
 # psst-rs
 
-`psst` is a minimal single-read secret sharing service. The technical project name remains `psst-rs`.
+`psst` is a minimal single-read secret sharing service.
 
 The secret is encrypted in the browser with AES-GCM. The server only receives the `ciphertext` and the `nonce`. The key stays only in the URL fragment after `#`.
 
@@ -36,20 +36,46 @@ These points are the core product contract. Contributions should preserve them:
 
 ## Reference Architecture
 
-The target deployment stays intentionally simple:
+```mermaid
+flowchart TD
+    subgraph Browser["Client Browser"]
+        UI["Web UI · HTML / JS / Web Crypto API"]
+        FragNote["AES-GCM key stays in URL fragment\nnever transmitted to server"]
+    end
 
-```text
-Client browser
-  -> HTTPS
-Cloudflare
-  -> HTTPS
-nginx
-  -> HTTP local
-psst-rs on 127.0.0.1:3000
-  -> SQLite
+    subgraph CF["Cloudflare"]
+        CFProxy["Reverse Proxy\nTLS termination · IPv6 · DDoS protection"]
+        TurnstileAPI["Turnstile Verify API\nhttps://challenges.cloudflare.com"]
+    end
+
+    subgraph SCW["Scaleway STARDUST1-S · Alpine Linux"]
+        subgraph SG["Security Group  —  inbound default: DROP"]
+            SG1["Cloudflare IPv6 CIDRs → TCP :80 :443"]
+            SG2["Admin CIDRs → TCP :22"]
+        end
+
+        nginx["nginx\n:80 → 301 HTTPS redirect\n:443 TLS with Cloudflare Origin CA cert\nclient_max_body_size 64 kB"]
+
+        subgraph psst["psst-rs · Rust / Axum / Tokio · 127.0.0.1:3000 · OpenRC"]
+            Routes["Routes\nGET /  ·  GET /s/{id}\nPOST /api/create  ·  GET /api/secrets/{id}\nPOST /api/delete/{id}  ·  GET /healthz"]
+            RL["Rate Limiter\nIP pseudonymised with SHA-256 + salt\ncreate 5/min · 30/h  ·  read 60/min"]
+            Maint["Maintenance Loop · every 5 min\ndelete expired secrets\npurge stale rate-limit buckets"]
+        end
+
+        DB[("SQLite\n/var/lib/psst-rs/secrets.db\nsecrets · rate_limits")]
+    end
+
+    UI -->|"HTTPS — Cloudflare cert"| CFProxy
+    CFProxy -->|"HTTPS — Origin CA cert"| nginx
+    nginx -->|"HTTP proxy_pass\nX-Real-IP · X-Forwarded-For"| Routes
+    Routes --> RL
+    Routes <-->|"atomic consume on read · insert · delete"| DB
+    RL <-->|"increment / check counters"| DB
+    Maint -->|"DELETE expired rows"| DB
+    Routes -.->|"token verify · HTTPS outbound"| TurnstileAPI
 ```
 
-The Rust application is not meant to terminate TLS itself. It listens locally behind the reverse proxy.
+The Rust application is not meant to terminate TLS itself. It listens locally behind the reverse proxy. The firewall only allows Cloudflare egress IPs inbound on HTTP/HTTPS — direct access to the origin is blocked.
 
 ## Prerequisites
 
