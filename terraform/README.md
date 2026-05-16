@@ -1,21 +1,21 @@
 # OpenTofu / Scaleway + Cloudflare
 
-Cette configuration gere:
+This configuration manages:
 
-- la VM Scaleway existante ;
-- le security group de la VM ;
-- en option, la couche Cloudflare minimale pour le DNS et le certificat Origin CA.
+- the existing Scaleway VM;
+- the VM security group;
+- optionally, the minimal Cloudflare layer for DNS and the Origin CA certificate.
 
-## Ressources actuellement gerees
+## Resources currently managed
 
-- serveur Scaleway `scw-festive-noether` (`8aa55fa0-c312-463e-a39b-aca4ef53798a`)
-- security group dedie de la VM
-- ranges IPv6 Cloudflare pour le filtrage reseau
-- en option:
-  - record DNS `AAAA` proxifie dans Cloudflare ;
-  - certificat Cloudflare Origin CA pour le hostname public
+- Scaleway server `scw-festive-noether` (`8aa55fa0-c312-463e-a39b-aca4ef53798a`)
+- dedicated VM security group
+- Cloudflare IPv6 ranges for network filtering
+- optionally:
+  - proxied `AAAA` DNS record in Cloudflare;
+  - Cloudflare Origin CA certificate for the public hostname
 
-## Commandes utiles
+## Useful commands
 
 ```bash
 cd terraform
@@ -26,39 +26,39 @@ tofu plan
 
 ## Cloudflare
 
-La partie Cloudflare est desactivee par defaut avec `cloudflare_enabled = false`.
+The Cloudflare part is disabled by default with `cloudflare_enabled = false`.
 
-Quand elle est activee, Terraform gere:
+When enabled, Terraform manages:
 
-- un record `AAAA` proxifie dans Cloudflare ;
-- un certificat Origin CA couvrant le hostname public ;
-- la cle privee locale associee au certificat.
+- a proxied `AAAA` record in Cloudflare;
+- an Origin CA certificate covering the public hostname;
+- the local private key associated with the certificate.
 
-Le hostname public est deduit d'une seule variable:
+The public hostname is derived from a single variable:
 
 - `cloudflare_hostname`
 
-Cette valeur sert a la fois pour:
+This value is used for both:
 
-- le record DNS Cloudflare ;
-- le certificat Origin CA.
+- the Cloudflare DNS record;
+- the Origin CA certificate.
 
-L'adresse IPv6 du record `AAAA` n'est pas renseignee a la main: elle est derivee automatiquement de l'IPv6 publique de `scaleway_instance_server.main`.
+The IPv6 address of the `AAAA` record is not entered manually: it is automatically derived from the public IPv6 of `scaleway_instance_server.main`.
 
-### Activation
+### Enabling it
 
-1. Copie `cloudflare.auto.tfvars.example` vers `cloudflare.auto.tfvars`.
-2. Renseigne au minimum:
+1. Copy `cloudflare.auto.tfvars.example` to `cloudflare.auto.tfvars`.
+2. Fill in at least:
    - `cloudflare_zone_id`
    - `cloudflare_hostname`
-3. Exporte les credentials Cloudflare avant `plan` ou `apply`:
+3. Export the Cloudflare credentials before `plan` or `apply`:
 
 ```bash
 export CLOUDFLARE_API_TOKEN="..."
 export CLOUDFLARE_API_USER_SERVICE_KEY="..."
 ```
 
-Exemple minimal:
+Minimal example:
 
 ```hcl
 cloudflare_enabled  = true
@@ -66,20 +66,20 @@ cloudflare_zone_id  = "your-zone-id"
 cloudflare_hostname = "psst.example.com"
 ```
 
-### Notes importantes
+### Important notes
 
-- `CLOUDFLARE_API_USER_SERVICE_KEY` reste necessaire pour l'API Origin CA.
-- Si des ressources Cloudflare existent deja dans le state, `tofu plan` doit quand meme avoir les credentials Cloudflare pour pouvoir faire le refresh.
-- La cle privee Origin CA se retrouve dans le state Terraform. Il faut donc proteger ce state ou utiliser un backend chiffre avant usage en production.
-- Le record DNS applicatif cree est un `AAAA` proxifie par Cloudflare, adapte a la VM IPv6-only actuelle.
+- `CLOUDFLARE_API_USER_SERVICE_KEY` is still required for the Origin CA API.
+- If Cloudflare resources already exist in the state, `tofu plan` still needs the Cloudflare credentials so it can refresh them.
+- The Origin CA private key ends up in the Terraform state. You should therefore protect that state or use an encrypted backend before production use.
+- The application DNS record that gets created is a Cloudflare-proxied `AAAA` record, suitable for the current IPv6-only VM.
 
-### Sorties utiles
+### Useful outputs
 
 - `cloudflare_origin_ca_certificate_pem`
 - `cloudflare_origin_ca_private_key_pem`
 - `cloudflare_origin_ca_expires_on`
 
-Exemple pour recuperer les artefacts nginx:
+Example to retrieve the nginx artifacts:
 
 ```bash
 tofu output -raw cloudflare_origin_ca_certificate_pem > /tmp/origin.crt
@@ -88,24 +88,24 @@ tofu output -raw cloudflare_origin_ca_private_key_pem > /tmp/origin.key
 
 ## Turnstile
 
-Turnstile n'est plus gere par Terraform dans ce depot.
+Turnstile is no longer managed by Terraform in this repository.
 
-Creation manuelle recommandee dans Cloudflare:
+Recommended manual creation in Cloudflare:
 
-- creer un widget Turnstile pour `cloudflare_hostname` ;
-- recuperer le `sitekey` pour le frontend ;
-- recuperer le `secret` pour la verification serveur ;
-- stocker le `secret` hors Git, par exemple via Ansible Vault ou une variable d'environnement au deploiement.
+- create a Turnstile widget for `cloudflare_hostname`;
+- retrieve the `sitekey` for the frontend;
+- retrieve the `secret` for server-side verification;
+- store the `secret` outside Git, for example via Ansible Vault or an environment variable at deployment time.
 
-## Reseau Cloudflare
+## Cloudflare network
 
-Les CIDR IPv6 Cloudflare ne sont plus codes en dur. Terraform les recupere depuis l'API officielle Cloudflare:
+Cloudflare IPv6 CIDRs are no longer hardcoded. Terraform retrieves them from the official Cloudflare API:
 
 - `https://api.cloudflare.com/client/v4/ips`
 
-Documentation utile:
+Useful documentation:
 
 - `https://www.cloudflare.com/ips-v6/`
 - `https://developers.cloudflare.com/api/resources/ips/`
 
-Effet pratique: au prochain `tofu plan` ou `tofu apply`, si Cloudflare publie un changement de ranges IPv6, Terraform detectera le diff et proposera la mise a jour du security group.
+Practical effect: on the next `tofu plan` or `tofu apply`, if Cloudflare publishes a change to its IPv6 ranges, Terraform will detect the diff and propose an update to the security group.

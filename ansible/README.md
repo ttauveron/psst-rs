@@ -1,42 +1,42 @@
 # Ansible
 
-Structure minimale pour deployer `psst-rs` sur une VM Alpine avec OpenRC et nginx.
+Minimal structure to deploy `psst-rs` to an Alpine VM with OpenRC and nginx.
 
-## Artefacts locaux a fournir
+## Local artifacts to provide
 
-- `files/bin/psst-rs` : binaire Rust deja compile pour la VM cible
-- `files/tls/origin.crt` : certificat TLS
-- `files/tls/origin.key` : cle privee TLS
+- `files/bin/psst-rs`: Rust binary already compiled for the target VM
+- `files/tls/origin.crt`: TLS certificate
+- `files/tls/origin.key`: TLS private key
 
-Ces fichiers sont ignores par Git. Pour la cle TLS, prefere un fichier hors repo ou Ansible Vault.
+These files are ignored by Git. For the TLS key, prefer a file outside the repository or Ansible Vault.
 
-## Jonction Terraform
+## Terraform integration
 
-Par defaut, le playbook essaie de lire les outputs Terraform dans `../terraform` pour recuperer automatiquement:
+By default, the playbook tries to read Terraform outputs from `../terraform` to automatically retrieve:
 
 - `cloudflare_hostname`
 - `cloudflare_origin_ca_certificate_pem`
 - `cloudflare_origin_ca_private_key_pem`
 
-Quand ces outputs sont disponibles, Ansible:
+When these outputs are available, Ansible:
 
-- derive `psst_domain` et `psst_public_base_url` depuis Terraform ;
-- installe le certificat Origin CA et sa cle privee sans passer par `files/tls/*`.
+- derives `psst_domain` and `psst_public_base_url` from Terraform;
+- installs the Origin CA certificate and its private key without using `files/tls/*`.
 
-Si Terraform n'est pas pret ou si tu veux rester en mode manuel, mets:
+If Terraform is not ready yet or if you want to stay in manual mode, set:
 
 ```yaml
 psst_use_terraform_outputs: false
 ```
 
-Dans ce cas, Ansible revient au comportement initial et attend `files/tls/origin.crt` et `files/tls/origin.key`.
+In that case, Ansible falls back to the original behavior and expects `files/tls/origin.crt` and `files/tls/origin.key`.
 
-## Execution
+## Running
 
-Le flux le plus simple pour un home lab passe par le `Makefile` a la racine du repo.
+The simplest workflow for a home lab uses the `Makefile` at the repository root.
 
-1. Cree un fichier `.env` a la racine a partir de `.env.example`.
-2. Renseigne dedans :
+1. Create a `.env` file at the root from `.env.example`.
+2. Fill it with:
 
 ```dotenv
 CLOUDFLARE_API_TOKEN=...
@@ -44,57 +44,57 @@ PSST_TURNSTILE_SITE_KEY=...
 PSST_TURNSTILE_SECRET_KEY=...
 ```
 
-3. Lance ensuite :
+3. Then run:
 
 ```bash
 make deploy
 ```
 
-Cette cible :
+This target:
 
-- compile un binaire release compatible Alpine via musl ;
-- copie `target/x86_64-unknown-linux-musl/release/psst-rs` vers `ansible/files/bin/psst-rs` ;
-- applique Terraform ;
-- lance le playbook Ansible.
+- builds an Alpine-compatible release binary via musl;
+- copies `target/x86_64-unknown-linux-musl/release/psst-rs` to `ansible/files/bin/psst-rs`;
+- applies Terraform;
+- runs the Ansible playbook.
 
-Tu peux aussi executer les etapes separement :
+You can also run the steps separately:
 
 ```bash
 make terraform-apply
 make ansible-deploy
 ```
 
-Ou, pour recompiler et redeployer sans repasser par Terraform :
+Or, to rebuild and redeploy without going through Terraform again:
 
 ```bash
 make deploy-no-terraform
 ```
 
-Le fichier `.env` est ignore par Git. Le depot ne doit contenir que `.env.example` avec des placeholders.
+The `.env` file is ignored by Git. The repository should only contain `.env.example` with placeholders.
 
-Le build de deploiement passe par Docker pour produire un binaire `x86_64-unknown-linux-musl`, adapte a Alpine.
+The deployment build goes through Docker to produce an `x86_64-unknown-linux-musl` binary suitable for Alpine.
 
-## Execution manuelle
+## Manual run
 
 ```bash
 cd ansible
 ansible-playbook site.yml --ask-become-pass
 ```
 
-## Personnalisation
+## Customization
 
-Les variables principales sont dans `group_vars/all.yml` :
+The main variables are in `group_vars/all.yml`:
 
-- domaine public ;
-- chemin du healthcheck ;
-- chemins de deploiement ;
-- variables d'environnement de l'application ;
-- chemins des certificats TLS ;
-- resolvers DNS IPv6 pour les hotes IPv6-only.
+- public domain;
+- healthcheck path;
+- deployment paths;
+- application environment variables;
+- TLS certificate paths;
+- IPv6 DNS resolvers for IPv6-only hosts.
 
-Par defaut, le playbook ecrit `/etc/resolv.conf` avec les resolvers definis dans `psst_resolv_nameservers` avant meme le bootstrap Python. Cela evite les echecs `apk` sur une VM IPv6-only qui aurait encore des DNS IPv4.
+By default, the playbook writes `/etc/resolv.conf` with the resolvers defined in `psst_resolv_nameservers` even before Python bootstrap. This avoids `apk` failures on an IPv6-only VM that still has IPv4 DNS configured.
 
-Tu peux desactiver ce comportement avec :
+You can disable this behavior with:
 
 ```yaml
 psst_manage_resolv_conf: false
@@ -102,22 +102,22 @@ psst_manage_resolv_conf: false
 
 ## Turnstile
 
-Le frontend et l'API attendent maintenant de vraies cles Turnstile:
+The frontend and API now expect real Turnstile keys:
 
-- `PSST_RS_TURNSTILE_SITE_KEY` cote application ;
-- `PSST_RS_TURNSTILE_SECRET_KEY` cote verification serveur.
+- `PSST_RS_TURNSTILE_SITE_KEY` on the application side;
+- `PSST_RS_TURNSTILE_SECRET_KEY` for server-side verification.
 
-Le playbook lit par defaut `PSST_TURNSTILE_SITE_KEY` et `PSST_TURNSTILE_SECRET_KEY` depuis l'environnement du controleur Ansible. Tu peux aussi surcharger `psst_turnstile_site_key` et `psst_turnstile_secret_key` via Ansible Vault.
+By default, the playbook reads `PSST_TURNSTILE_SITE_KEY` and `PSST_TURNSTILE_SECRET_KEY` from the Ansible controller environment. You can also override `psst_turnstile_site_key` and `psst_turnstile_secret_key` via Ansible Vault.
 
-Si `psst_enable_create: true`, le playbook echoue tant que ces deux valeurs ne sont pas definies.
+If `psst_enable_create: true`, the playbook fails until both values are defined.
 
-Le service OpenRC lance `psst-rs` via un petit wrapper shell qui source explicitement `{{ psst_env_file | default('/etc/psst-rs/psst-rs.env') }}` avant d'exec le binaire. Cela evite les ambiguïtés de chargement d'environnement avec `openrc-run`.
+The OpenRC service starts `psst-rs` through a small shell wrapper that explicitly sources `{{ psst_env_file | default('/etc/psst-rs/psst-rs.env') }}` before executing the binary. This avoids environment-loading ambiguity with `openrc-run`.
 
-## Smoke test post-deploiement
+## Post-deployment smoke test
 
-Apres avoir applique les changements et vide les handlers en attente, le playbook verifie automatiquement deux chemins :
+After applying changes and flushing pending handlers, the playbook automatically checks two paths:
 
-- l'application directement sur `http://{{ psst_bind_addr | default('127.0.0.1:3000') }}{{ psst_healthcheck_path | default('/healthz') }}` ;
-- nginx en local sur `https://127.0.0.1{{ psst_healthcheck_path | default('/healthz') }}` avec l'en-tete `Host: {{ psst_domain | default('psst.example.com') }}`.
+- the application directly at `http://{{ psst_bind_addr | default('127.0.0.1:3000') }}{{ psst_healthcheck_path | default('/healthz') }}`;
+- nginx locally at `https://127.0.0.1{{ psst_healthcheck_path | default('/healthz') }}` with the `Host: {{ psst_domain | default('psst.example.com') }}` header.
 
-Le second test valide le chainage `nginx -> psst-rs` sans dependre d'un hairpin DNS ni de Cloudflare. La verification TLS est volontairement desactivee pour ce test local car le certificat Origin CA installe sur la VM n'est pas une chaine publique faite pour etre verifiee directement par le serveur lui-meme.
+The second test validates the `nginx -> psst-rs` chain without depending on hairpin DNS or Cloudflare. TLS verification is intentionally disabled for this local test because the Origin CA certificate installed on the VM is not a public chain meant to be verified directly by the server itself.
