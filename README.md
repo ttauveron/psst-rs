@@ -104,43 +104,43 @@ make test-rust
 make test-frontend
 ```
 
-## Home Lab Deployment
+## Deployment
 
-The simplest flow goes through the repository `Makefile`.
+Infrastructure and deployment automation now live in the separate private repository `infrastructure`.
 
-1. Create `.env` at the repository root from `.env.example`.
-2. Fill in:
+This repository only keeps the application source, tests, and build logic. Use the `infrastructure` repository for:
 
-```dotenv
-CLOUDFLARE_API_TOKEN=...
-PSST_TURNSTILE_SITE_KEY=...
-PSST_TURNSTILE_SECRET_KEY=...
-PSST_IP_HASH_SALT=...
-```
+- Terraform / OpenTofu
+- Ansible
+- operator environment variables
+- deployment assets
 
-3. Run:
+For release-oriented builds targeting Alpine-compatible Linux, use:
 
 ```bash
-make deploy
+make build-release-alpine
 ```
 
-This command:
-
-- builds an Alpine-compatible release binary with musl;
-- copies it to `ansible/files/bin/psst-rs`;
-- applies Terraform;
-- deploys with Ansible;
-- verifies at the end of the playbook that `/healthz` responds both from `psst-rs` directly and through nginx.
-
-The `.env` file is ignored by Git. Do not commit secrets; only keep `.env.example` in the repository.
-
-For local development, `make build-release` keeps a native build for your machine. Deployment packaging goes through `make build-release-alpine` in a Docker container.
-
-If Terraform is already applied and you only want to redeploy the application:
+For a native release build on the current machine, use:
 
 ```bash
-make deploy-no-terraform
+make build-release
 ```
+
+## GitHub Releases
+
+Application deployment is expected to consume GitHub Release artifacts produced by:
+
+- [release.yml](/home/ttauveron/git/dev/psst-rs/.github/workflows/release.yml:1)
+
+That workflow builds release binaries for the supported targets and uploads them to the GitHub Release.
+
+The intended flow is:
+
+1. Push your changes to the main branch.
+2. Create a GitHub Release for the version you want to deploy.
+3. Let the release workflow publish the binaries.
+4. Deploy that version from the `infrastructure` repository.
 
 Tests currently cover:
 

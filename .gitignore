@@ -1,14 +1,4 @@
 /target
-/terraform/.terraform/
-/terraform/*.tfstate
-/terraform/*.tfstate.*
-/terraform/crash.log
-/ansible/files/bin/*
-/ansible/files/tls/*
-!/ansible/files/bin/.gitkeep
-!/ansible/files/tls/.gitkeep
-
-/terraform/cloudflare.auto.tfvars
 /.env
 .gstack/
 WORKSPACE.md
