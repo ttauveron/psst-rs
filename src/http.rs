@@ -1,5 +1,6 @@
 use std::{
     fmt::Write as _,
+    sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -32,6 +33,7 @@ use tracing::info;
 use crate::{
     config::AppConfig,
     db::{ActiveSecretStats, Database, NewSecretRecord, SecretStore},
+    metrics::AppMetrics,
     rate_limit::RateLimitBucket,
     request_context::ClientIp,
     secret::{
@@ -64,6 +66,7 @@ struct AppState {
     config: AppConfig,
     secret_store: SecretStore,
     turnstile_client: TurnstileHttpClient,
+    metrics: Arc<AppMetrics>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -118,18 +121,28 @@ impl IntoResponse for ApiError {
 }
 
 pub fn build_router(config: AppConfig, database: Database) -> Router {
+    build_router_with_metrics(config, database, AppMetrics::new())
+}
+
+pub fn build_router_with_metrics(
+    config: AppConfig,
+    database: Database,
+    metrics: Arc<AppMetrics>,
+) -> Router {
     let max_json_body_bytes =
         usize::try_from(config.max_ciphertext_bytes.saturating_add(4096)).unwrap_or(usize::MAX);
     let app_state = AppState {
         config: config.clone(),
         secret_store: SecretStore::new(database),
         turnstile_client: build_turnstile_client(),
+        metrics,
     };
 
     Router::new()
         .route("/", get(index))
         .route("/s/{id}", get(read_secret_page))
         .route("/healthz", get(healthz))
+        .route("/metrics", get(metrics_handler))
         .route("/static/app.css", get(static_app_css))
         .route("/static/app.js", get(static_app_js))
         .route("/api/create", post(create_secret_stub))
@@ -152,6 +165,16 @@ async fn read_secret_page(Path(secret_id): Path<String>) -> Html<String> {
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        state.metrics.render(&state.config),
+    )
 }
 
 async fn static_app_css() -> impl IntoResponse {
@@ -180,17 +203,54 @@ async fn create_secret_stub(
     client_ip: Option<Extension<ClientIp>>,
     Json(payload): Json<CreateSecretRequest>,
 ) -> Result<Json<CreateSecretResponse>, ApiError> {
+    use std::sync::atomic::Ordering::Relaxed;
+
     let now_timestamp = current_timestamp()?;
-    let validated = validate_create_request(&state.config, &payload)?;
+    let validated = validate_create_request(&state.config, &payload).map_err(|(e, reason)| {
+        match reason {
+            CreateRejectedReason::TooLarge => {
+                state.metrics.create_rejected_too_large.fetch_add(1, Relaxed);
+            }
+            CreateRejectedReason::InvalidTtl => {
+                state.metrics.create_rejected_invalid_ttl.fetch_add(1, Relaxed);
+            }
+            CreateRejectedReason::InvalidPayload => {
+                state.metrics.create_rejected_invalid_payload.fetch_add(1, Relaxed);
+            }
+            CreateRejectedReason::StorageLimit => {
+                state.metrics.create_rejected_storage_limit.fetch_add(1, Relaxed);
+            }
+        }
+        e
+    })?;
+
     let client_ip = client_ip.map(|Extension(client_ip)| client_ip);
     let requester_ip_hash = client_ip
         .as_ref()
         .map(|client_ip| client_ip.hashed_identifier(&state.config.ip_hash_salt));
 
     ensure_create_enabled(&state.config)?;
-    enforce_global_create_quotas(&state, now_timestamp, validated.ciphertext_size_bytes)?;
-    check_create_rate_limit_hook(&state, requester_ip_hash.as_deref(), now_timestamp)?;
-    verify_turnstile(&state, client_ip.map(|client_ip| client_ip.0), &payload).await?;
+
+    enforce_global_create_quotas(&state, now_timestamp, validated.ciphertext_size_bytes)
+        .map_err(|(e, _)| {
+            state.metrics.create_rejected_storage_limit.fetch_add(1, Relaxed);
+            e
+        })?;
+
+    check_create_rate_limit_hook(&state, requester_ip_hash.as_deref(), now_timestamp).map_err(
+        |e| {
+            state.metrics.create_rejected_rate_limited.fetch_add(1, Relaxed);
+            state.metrics.rate_limited_create.fetch_add(1, Relaxed);
+            e
+        },
+    )?;
+
+    verify_turnstile(&state, client_ip.map(|client_ip| client_ip.0), &payload)
+        .await
+        .map_err(|e| {
+            state.metrics.create_rejected_turnstile_failed.fetch_add(1, Relaxed);
+            e
+        })?;
 
     let generated = generate_secret_reference();
     let expires_at = now_timestamp
@@ -214,7 +274,17 @@ async fn create_secret_stub(
     state
         .secret_store
         .insert_secret(&new_secret)
-        .map_err(|error| ApiError::internal(format!("failed to persist secret: {error}")))?;
+        .map_err(|error| {
+            state.metrics.db_errors_create.fetch_add(1, Relaxed);
+            ApiError::internal(format!("failed to persist secret: {error}"))
+        })?;
+
+    state.metrics.secrets_created.fetch_add(1, Relaxed);
+    state.metrics.active_secrets.fetch_add(1, Relaxed);
+    state
+        .metrics
+        .storage_bytes
+        .fetch_add(i64::try_from(validated.ciphertext_size_bytes).unwrap_or(0), Relaxed);
 
     Ok(Json(CreateSecretResponse {
         id: generated.secret_id,
@@ -227,15 +297,24 @@ async fn read_secret(
     client_ip: Option<Extension<ClientIp>>,
     Path(secret_id): Path<String>,
 ) -> Result<Json<ReadSecretResponse>, ApiError> {
+    use std::sync::atomic::Ordering::Relaxed;
+
     let now_timestamp = current_timestamp()?;
     let requester_ip_hash = client_ip
         .map(|Extension(client_ip)| client_ip.hashed_identifier(&state.config.ip_hash_salt));
-    check_read_rate_limit(&state, requester_ip_hash.as_deref(), now_timestamp)?;
+
+    check_read_rate_limit(&state, requester_ip_hash.as_deref(), now_timestamp).map_err(|e| {
+        state.metrics.rate_limited_read.fetch_add(1, Relaxed);
+        e
+    })?;
 
     let secret = state
         .secret_store
         .consume_unexpired_secret_by_id(&secret_id, now_timestamp)
-        .map_err(|error| ApiError::internal(format!("failed to load secret: {error}")))?;
+        .map_err(|error| {
+            state.metrics.db_errors_read.fetch_add(1, Relaxed);
+            ApiError::internal(format!("failed to load secret: {error}"))
+        })?;
 
     let Some(secret) = secret else {
         return Err(ApiError {
@@ -243,6 +322,13 @@ async fn read_secret(
             message: "secret not found".to_owned(),
         });
     };
+
+    state.metrics.secrets_read.fetch_add(1, Relaxed);
+    state.metrics.active_secrets.fetch_sub(1, Relaxed);
+    state
+        .metrics
+        .storage_bytes
+        .fetch_sub(i64::try_from(secret.size_bytes).unwrap_or(0), Relaxed);
 
     Ok(Json(ReadSecretResponse {
         ciphertext: secret.ciphertext,
@@ -255,21 +341,33 @@ async fn delete_secret(
     Path(secret_id): Path<String>,
     Json(payload): Json<DeleteSecretRequest>,
 ) -> Result<Json<DeleteSecretResponse>, ApiError> {
+    use std::sync::atomic::Ordering::Relaxed;
+
     if payload.delete_token.is_empty() {
         return Err(ApiError::bad_request("delete_token must not be empty"));
     }
 
-    let deleted = state
+    let deleted_size = state
         .secret_store
         .delete_secret_by_id_and_token_hash(&secret_id, &hash_delete_token(&payload.delete_token))
-        .map_err(|error| ApiError::internal(format!("failed to delete secret: {error}")))?;
+        .map_err(|error| {
+            state.metrics.db_errors_delete.fetch_add(1, Relaxed);
+            ApiError::internal(format!("failed to delete secret: {error}"))
+        })?;
 
-    if !deleted {
+    let Some(size_bytes) = deleted_size else {
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
             message: "secret not found".to_owned(),
         });
-    }
+    };
+
+    state.metrics.secrets_deleted.fetch_add(1, Relaxed);
+    state.metrics.active_secrets.fetch_sub(1, Relaxed);
+    state
+        .metrics
+        .storage_bytes
+        .fetch_sub(i64::try_from(size_bytes).unwrap_or(0), Relaxed);
 
     Ok(Json(DeleteSecretResponse { deleted: true }))
 }
@@ -461,44 +559,71 @@ struct ValidatedCreateRequest {
     expires_in_seconds: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreateRejectedReason {
+    TooLarge,
+    InvalidTtl,
+    InvalidPayload,
+    StorageLimit,
+}
+
 fn validate_create_request(
     config: &AppConfig,
     payload: &CreateSecretRequest,
-) -> Result<ValidatedCreateRequest, ApiError> {
+) -> Result<ValidatedCreateRequest, (ApiError, CreateRejectedReason)> {
     if payload.ciphertext.is_empty() {
-        return Err(ApiError::bad_request("ciphertext must not be empty"));
+        return Err((
+            ApiError::bad_request("ciphertext must not be empty"),
+            CreateRejectedReason::InvalidPayload,
+        ));
     }
 
-    let ciphertext_size_bytes = u64::try_from(payload.ciphertext.len())
-        .map_err(|_| ApiError::bad_request("ciphertext is too large"))?;
+    let ciphertext_size_bytes = u64::try_from(payload.ciphertext.len()).map_err(|_| {
+        (
+            ApiError::bad_request("ciphertext is too large"),
+            CreateRejectedReason::TooLarge,
+        )
+    })?;
     if ciphertext_size_bytes > config.max_ciphertext_bytes {
-        return Err(ApiError::bad_request(
-            "ciphertext exceeds the configured size limit",
+        return Err((
+            ApiError::bad_request("ciphertext exceeds the configured size limit"),
+            CreateRejectedReason::TooLarge,
         ));
     }
 
     if payload.nonce.is_empty() {
-        return Err(ApiError::bad_request("nonce must not be empty"));
+        return Err((
+            ApiError::bad_request("nonce must not be empty"),
+            CreateRejectedReason::InvalidPayload,
+        ));
     }
 
     if u64::try_from(payload.nonce.len())
-        .map_err(|_| ApiError::bad_request("nonce is too large"))?
+        .map_err(|_| {
+            (
+                ApiError::bad_request("nonce is too large"),
+                CreateRejectedReason::TooLarge,
+            )
+        })?
         > config.max_ciphertext_bytes
     {
-        return Err(ApiError::bad_request(
-            "nonce exceeds the configured size limit",
+        return Err((
+            ApiError::bad_request("nonce exceeds the configured size limit"),
+            CreateRejectedReason::TooLarge,
         ));
     }
 
     if !is_allowed_ttl(payload.expires_in_seconds) {
-        return Err(ApiError::bad_request(
-            "expires_in_seconds is not an allowed TTL",
+        return Err((
+            ApiError::bad_request("expires_in_seconds is not an allowed TTL"),
+            CreateRejectedReason::InvalidTtl,
         ));
     }
 
     if payload.expires_in_seconds > config.max_ttl_seconds {
-        return Err(ApiError::bad_request(
-            "expires_in_seconds exceeds the configured TTL limit",
+        return Err((
+            ApiError::bad_request("expires_in_seconds exceeds the configured TTL limit"),
+            CreateRejectedReason::InvalidTtl,
         ));
     }
 
@@ -522,28 +647,40 @@ fn enforce_global_create_quotas(
     state: &AppState,
     now_timestamp: i64,
     new_secret_size_bytes: u64,
-) -> Result<(), ApiError> {
+) -> Result<(), (ApiError, CreateRejectedReason)> {
     let ActiveSecretStats {
         active_secret_count,
         active_storage_bytes,
     } = state
         .secret_store
         .active_secret_stats(now_timestamp)
-        .map_err(|error| ApiError::internal(format!("failed to check global quotas: {error}")))?;
+        .map_err(|error| {
+            (
+                ApiError::internal(format!("failed to check global quotas: {error}")),
+                CreateRejectedReason::StorageLimit,
+            )
+        })?;
 
     if active_secret_count >= state.config.global_max_active_secrets {
-        return Err(ApiError::service_unavailable(
-            "global active secret quota has been reached",
+        return Err((
+            ApiError::service_unavailable("global active secret quota has been reached"),
+            CreateRejectedReason::StorageLimit,
         ));
     }
 
     let projected_storage_bytes = active_storage_bytes
         .checked_add(new_secret_size_bytes)
-        .ok_or_else(|| ApiError::internal("global storage quota calculation overflowed"))?;
+        .ok_or_else(|| {
+            (
+                ApiError::internal("global storage quota calculation overflowed"),
+                CreateRejectedReason::StorageLimit,
+            )
+        })?;
 
     if projected_storage_bytes > state.config.global_max_storage_bytes {
-        return Err(ApiError::service_unavailable(
-            "global storage quota has been reached",
+        return Err((
+            ApiError::service_unavailable("global storage quota has been reached"),
+            CreateRejectedReason::StorageLimit,
         ));
     }
 
@@ -1644,6 +1781,179 @@ mod tests {
             .expect("request should build");
 
         assert_eq!(matched_path_or_uri(&request), "unmatched");
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_returns_200_with_correct_content_type() {
+        let (_guard, app, _database) = test_router("metrics-basic", AppConfig::default());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&header_value("text/plain; version=0.0.4; charset=utf-8"))
+        );
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_contains_expected_metric_names() {
+        let (_guard, app, _database) = test_router("metrics-names", AppConfig::default());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let text = String::from_utf8(body.to_vec()).expect("body should be utf-8");
+
+        for metric in &[
+            "psst_secrets_created_total",
+            "psst_secrets_read_total",
+            "psst_secrets_expired_total",
+            "psst_secrets_deleted_total",
+            "psst_abuse_reports_total",
+            "psst_create_rejected_total",
+            "psst_rate_limited_total",
+            "psst_db_errors_total",
+            "psst_purge_runs_total",
+            "psst_purge_deleted_total",
+            "psst_active_secrets",
+            "psst_storage_bytes",
+            "psst_config_max_secret_bytes",
+            "psst_config_max_ttl_seconds",
+            "psst_config_create_enabled",
+            "psst_build_info",
+        ] {
+            assert!(
+                text.contains(metric),
+                "metrics output missing: {metric}"
+            );
+        }
+
+        assert!(text.ends_with('\n'), "metrics output should end with newline");
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_contains_all_labeled_variants() {
+        let (_guard, app, _database) = test_router("metrics-labels", AppConfig::default());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let text = String::from_utf8(body.to_vec()).expect("body should be utf-8");
+
+        for label in &[
+            r#"psst_create_rejected_total{reason="too_large"}"#,
+            r#"psst_create_rejected_total{reason="invalid_ttl"}"#,
+            r#"psst_create_rejected_total{reason="turnstile_failed"}"#,
+            r#"psst_create_rejected_total{reason="rate_limited"}"#,
+            r#"psst_create_rejected_total{reason="storage_limit"}"#,
+            r#"psst_create_rejected_total{reason="invalid_payload"}"#,
+            r#"psst_rate_limited_total{operation="create"}"#,
+            r#"psst_rate_limited_total{operation="read"}"#,
+            r#"psst_rate_limited_total{operation="report"}"#,
+            r#"psst_db_errors_total{operation="create"}"#,
+            r#"psst_db_errors_total{operation="read"}"#,
+            r#"psst_db_errors_total{operation="delete"}"#,
+            r#"psst_db_errors_total{operation="purge"}"#,
+            r#"psst_db_errors_total{operation="metrics"}"#,
+        ] {
+            assert!(
+                text.contains(label),
+                "metrics output missing label: {label}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_does_not_expose_sensitive_data() {
+        let (_guard, app, _database) = test_router("metrics-sensitive", AppConfig::default());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let text = String::from_utf8(body.to_vec()).expect("body should be utf-8");
+
+        assert!(!text.contains("test-turnstile-secret-key"), "secret key must not appear");
+        assert!(!text.contains("test-ip-hash-salt"), "ip hash salt must not appear");
+        assert!(!text.contains("test-turnstile-site-key"), "site key must not appear");
+    }
+
+    #[tokio::test]
+    async fn metrics_counters_increment_on_create_and_read() {
+        let verifier = start_turnstile_test_server(TurnstileScenario::Success).await;
+        let mut config = AppConfig::default();
+        config.turnstile_verify_url = verifier.url.clone();
+        let (_guard, app, _database) = test_router("metrics-counters", config);
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/create")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"ciphertext":"ct","nonce":"nn","expires_in_seconds":86400,"turnstile_token":"valid-turnstile-token"}"#,
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(create_response.status(), StatusCode::OK);
+
+        let metrics_after_create = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        let body = axum::body::to_bytes(metrics_after_create.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let text = String::from_utf8(body.to_vec()).expect("body should be utf-8");
+        assert!(text.contains("psst_secrets_created_total 1"), "created counter should be 1");
     }
 
     fn header_value(value: &'static str) -> header::HeaderValue {

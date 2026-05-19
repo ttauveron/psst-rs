@@ -2,6 +2,7 @@ mod config;
 mod db;
 mod http;
 mod maintenance;
+mod metrics;
 mod rate_limit;
 mod request_context;
 mod secret;
@@ -11,7 +12,11 @@ use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
-    config::AppConfig, db::Database, http::build_router, maintenance::spawn_periodic_maintenance,
+    config::AppConfig,
+    db::Database,
+    http::build_router_with_metrics,
+    maintenance::spawn_periodic_maintenance,
+    metrics::AppMetrics,
 };
 
 #[tokio::main]
@@ -20,7 +25,8 @@ async fn main() -> Result<()> {
 
     let config = AppConfig::from_env()?;
     let database = Database::bootstrap(&config)?;
-    spawn_periodic_maintenance(config.clone(), database.clone());
+    let metrics = AppMetrics::new();
+    spawn_periodic_maintenance(config.clone(), database.clone(), metrics.clone());
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
 
     info!(
@@ -33,7 +39,7 @@ async fn main() -> Result<()> {
 
     axum::serve(
         listener,
-        build_router(config.clone(), database)
+        build_router_with_metrics(config.clone(), database, metrics)
             .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .await?;

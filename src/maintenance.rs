@@ -1,4 +1,7 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{Context, Result};
 use tracing::{info, warn};
@@ -6,6 +9,7 @@ use tracing::{info, warn};
 use crate::{
     config::AppConfig,
     db::{Database, SecretStore},
+    metrics::AppMetrics,
     rate_limit::RateLimitBucket,
 };
 
@@ -30,7 +34,13 @@ impl MaintenanceRunStats {
     }
 }
 
-pub fn spawn_periodic_maintenance(config: AppConfig, database: Database) {
+pub fn spawn_periodic_maintenance(
+    config: AppConfig,
+    database: Database,
+    metrics: Arc<AppMetrics>,
+) {
+    use std::sync::atomic::Ordering::Relaxed;
+
     let interval = Duration::from_secs(config.maintenance_interval_seconds);
 
     info!(
@@ -52,8 +62,29 @@ pub fn spawn_periodic_maintenance(config: AppConfig, database: Database) {
                 }
             };
 
-            if let Err(error) = run_maintenance_pass(&secret_store, now_timestamp) {
-                warn!(error = %error, "periodic maintenance run failed");
+            match run_maintenance_pass(&secret_store, now_timestamp) {
+                Ok(stats) => {
+                    metrics.purge_runs.fetch_add(1, Relaxed);
+                    metrics
+                        .purge_deleted
+                        .fetch_add(stats.expired_secrets_deleted as u64, Relaxed);
+                    metrics
+                        .secrets_expired
+                        .fetch_add(stats.expired_secrets_deleted as u64, Relaxed);
+
+                    if let Ok(active) = secret_store.active_secret_stats(now_timestamp) {
+                        metrics
+                            .active_secrets
+                            .store(active.active_secret_count as i64, Relaxed);
+                        metrics
+                            .storage_bytes
+                            .store(active.active_storage_bytes as i64, Relaxed);
+                    }
+                }
+                Err(error) => {
+                    metrics.db_errors_purge.fetch_add(1, Relaxed);
+                    warn!(error = %error, "periodic maintenance run failed");
+                }
             }
         }
     });

@@ -159,6 +159,7 @@ pub struct ActiveSecretStats {
     pub active_storage_bytes: u64,
 }
 
+
 #[allow(dead_code)]
 impl SecretStore {
     pub fn new(database: Database) -> Self {
@@ -224,17 +225,31 @@ impl SecretStore {
         &self,
         secret_id: &str,
         delete_token_hash: &str,
-    ) -> Result<bool> {
-        let connection = self.database.open_connection()?;
-        let deleted_rows = connection
-            .execute(
-                "DELETE FROM secrets
-                 WHERE id = ?1 AND delete_token_hash = ?2",
-                [secret_id, delete_token_hash],
-            )
-            .context("failed to delete secret record")?;
+    ) -> Result<Option<u64>> {
+        self.with_immediate_transaction(|connection| {
+            let size_bytes: Option<i64> = connection
+                .query_row(
+                    "SELECT size_bytes FROM secrets
+                     WHERE id = ?1 AND delete_token_hash = ?2",
+                    [secret_id, delete_token_hash],
+                    |row| row.get(0),
+                )
+                .optional()
+                .context("failed to query secret before deletion")?;
 
-        Ok(deleted_rows == 1)
+            let Some(size_bytes) = size_bytes else {
+                return Ok(None);
+            };
+
+            connection
+                .execute(
+                    "DELETE FROM secrets WHERE id = ?1 AND delete_token_hash = ?2",
+                    [secret_id, delete_token_hash],
+                )
+                .context("failed to delete secret record")?;
+
+            Ok(Some(u64::try_from(size_bytes).unwrap_or(0)))
+        })
     }
 
     pub fn delete_expired_secrets(&self, now_timestamp: i64) -> Result<usize> {
@@ -630,7 +645,7 @@ mod tests {
         let deleted = store
             .delete_secret_by_id_and_token_hash(&new_secret.id, "wrong-hash")
             .expect("delete with wrong hash should not fail");
-        assert!(!deleted);
+        assert!(deleted.is_none());
         assert!(
             store
                 .get_secret_by_id(&new_secret.id)
@@ -641,7 +656,7 @@ mod tests {
         let deleted = store
             .delete_secret_by_id_and_token_hash(&new_secret.id, &new_secret.delete_token_hash)
             .expect("delete with matching hash should succeed");
-        assert!(deleted);
+        assert!(deleted.is_some());
         assert!(
             store
                 .get_secret_by_id(&new_secret.id)
