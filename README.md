@@ -138,9 +138,16 @@ That workflow builds release binaries for the supported targets and uploads them
 The intended flow is:
 
 1. Push your changes to the main branch.
-2. Create a GitHub Release for the version you want to deploy.
-3. Let the release workflow publish the binaries.
-4. Deploy that version from the `infrastructure` repository.
+2. Create and push a version tag, for example:
+
+   ```bash
+   git tag 1.0.0
+   git push origin 1.0.0
+   ```
+
+3. Create a GitHub Release from that tag for the version you want to deploy.
+4. Let the release workflow publish the binaries.
+5. Deploy that version from the `infrastructure` repository.
 
 Tests currently cover:
 
