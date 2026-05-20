@@ -135,6 +135,8 @@ Application deployment is expected to consume GitHub Release artifacts produced 
 
 That workflow builds release binaries for the supported targets and uploads them to the GitHub Release.
 
+Published binaries expose the release tag in `/metrics` as `psst_build_info{version="..."}`.
+
 The intended flow is:
 
 1. Push your changes to the main branch.

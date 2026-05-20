@@ -56,6 +56,9 @@ jobs:
 
       - name: Build
         shell: bash
+        env:
+          PSST_RS_BUILD_VERSION: ${{ github.event.release.tag_name }}
+          PSST_RS_BUILD_COMMIT: ${{ github.sha }}
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }}

@@ -45,7 +45,7 @@ impl AppMetrics {
     pub fn render(&self, config: &AppConfig) -> String {
         let mut buf = String::with_capacity(4096);
 
-        let version = env!("CARGO_PKG_VERSION");
+        let version = option_env!("PSST_RS_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
         let commit = option_env!("PSST_RS_BUILD_COMMIT").unwrap_or("unknown");
         let _ = writeln!(buf, "# HELP psst_build_info Build information.");
         let _ = writeln!(buf, "# TYPE psst_build_info gauge");
