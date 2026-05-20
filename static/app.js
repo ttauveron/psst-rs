@@ -66,6 +66,11 @@ async function decryptCiphertext(rawKey, nonce, ciphertext) {
   return textDecoder.decode(plaintextBuffer)
 }
 
+async function computeKeyDigest(rawKey) {
+  const digestBuffer = await crypto.subtle.digest("SHA-256", rawKey)
+  return bytesToBase64Url(new Uint8Array(digestBuffer))
+}
+
 function getFragmentKey(locationLike) {
   return locationLike.hash.slice(1)
 }
@@ -177,6 +182,7 @@ async function bootCreatePage(root) {
 
     try {
       const { rawKey, nonce, ciphertext } = await encryptPlaintext(plaintext)
+      const keyDigest = await computeKeyDigest(rawKey)
 
       const response = await fetch("/api/create", {
         method: "POST",
@@ -186,6 +192,7 @@ async function bootCreatePage(root) {
         body: JSON.stringify({
           ciphertext: bytesToBase64Url(ciphertext),
           nonce: bytesToBase64Url(nonce),
+          key_digest: keyDigest,
           expires_in_seconds: Number(ttlSelect.value),
           turnstile_token: turnstileToken,
         }),
@@ -404,11 +411,16 @@ async function bootReadPage(root) {
 
     try {
       const keyBytes = decodeKeyFragment(rawKey)
-      const response = await fetch(`/api/secrets/${encodeURIComponent(secretId)}`)
+      const keyDigest = await computeKeyDigest(keyBytes)
+      const response = await fetch(`/api/secrets/${encodeURIComponent(secretId)}`, {
+        headers: {
+          "X-Psst-Key-Digest": keyDigest,
+        },
+      })
       const payload = await readJson(response)
 
       if (!response.ok) {
-        throw new Error("Secret not found, expired, or already read.")
+        throw new Error(payload.error || "Secret not found, expired, or already read.")
       }
 
       const plaintext = await decryptCiphertext(
@@ -543,6 +555,10 @@ function mapReadErrorMessage(error) {
     return "Invalid or malformed key. Check the full link before trying again."
   }
 
+  if (message.includes("invalid read key")) {
+    return "Invalid key or corrupted data. Check the full link."
+  }
+
   if (message.includes("decrypt") || message.includes("OperationError")) {
     return "Invalid key or corrupted data. Check the full link."
   }
@@ -609,6 +625,7 @@ if (globalThis.__psstTestHooks) {
     buildShareUrl,
     bytesToBase64Url,
     clearFragmentFromLocation,
+    computeKeyDigest,
     createTurnstileState,
     decodeKeyFragment,
     decryptCiphertext,

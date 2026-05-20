@@ -6,12 +6,14 @@ use sha2::{Digest, Sha256};
 
 const SECRET_ID_BYTES: usize = 16;
 const DELETE_TOKEN_BYTES: usize = 32;
+const SHA256_DIGEST_BYTES: usize = 32;
 pub const ALLOWED_TTL_SECONDS: [u64; 4] = [15 * 60, 60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct CreateSecretRequest {
     pub ciphertext: String,
     pub nonce: String,
+    pub key_digest: String,
     pub expires_in_seconds: u64,
     pub turnstile_token: String,
 }
@@ -62,6 +64,18 @@ pub fn hash_delete_token(delete_token: &str) -> String {
     URL_SAFE_NO_PAD.encode(digest)
 }
 
+pub fn hash_read_key(key_bytes: &[u8]) -> String {
+    let digest = Sha256::digest(key_bytes);
+    URL_SAFE_NO_PAD.encode(digest)
+}
+
+pub fn is_valid_read_key_digest(key_digest: &str) -> bool {
+    URL_SAFE_NO_PAD
+        .decode(key_digest)
+        .map(|bytes| bytes.len() == SHA256_DIGEST_BYTES)
+        .unwrap_or(false)
+}
+
 pub fn is_allowed_ttl(ttl_seconds: u64) -> bool {
     ALLOWED_TTL_SECONDS.contains(&ttl_seconds)
 }
@@ -77,7 +91,8 @@ mod tests {
 
     use super::{
         ALLOWED_TTL_SECONDS, DELETE_TOKEN_BYTES, GeneratedSecretReference, SECRET_ID_BYTES,
-        generate_secret_reference, hash_delete_token, is_allowed_ttl,
+        generate_secret_reference, hash_delete_token, hash_read_key, is_allowed_ttl,
+        is_valid_read_key_digest,
     };
 
     #[test]
@@ -101,6 +116,19 @@ mod tests {
 
         assert_eq!(first, second);
         assert_ne!(first, token);
+    }
+
+    #[test]
+    fn read_key_hash_is_deterministic_and_not_plaintext() {
+        let key = b"0123456789abcdef0123456789abcdef";
+
+        let first = hash_read_key(key);
+        let second = hash_read_key(key);
+
+        assert_eq!(first, second);
+        assert_ne!(first, String::from_utf8_lossy(key));
+        assert!(is_valid_read_key_digest(&first));
+        assert!(!is_valid_read_key_digest("bad-digest"));
     }
 
     #[test]

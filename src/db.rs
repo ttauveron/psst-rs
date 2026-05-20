@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS secrets (
   expires_at INTEGER NOT NULL,
   consumed_at INTEGER,
   delete_token_hash TEXT NOT NULL,
+  key_digest TEXT NOT NULL DEFAULT '',
   size_bytes INTEGER NOT NULL,
   requester_ip_hash TEXT
 );
@@ -74,6 +75,7 @@ impl Database {
         connection
             .execute_batch(SCHEMA_SQL)
             .context("failed to initialize SQLite schema")?;
+        ensure_secrets_key_digest_column(&connection)?;
 
         Ok(())
     }
@@ -130,6 +132,7 @@ pub struct SecretRecord {
     pub expires_at: i64,
     pub consumed_at: Option<i64>,
     pub delete_token_hash: String,
+    pub key_digest: String,
     pub size_bytes: u64,
     pub requester_ip_hash: Option<String>,
 }
@@ -143,6 +146,7 @@ pub struct NewSecretRecord {
     pub created_at: i64,
     pub expires_at: i64,
     pub delete_token_hash: String,
+    pub key_digest: String,
     pub size_bytes: u64,
     pub requester_ip_hash: Option<String>,
 }
@@ -159,6 +163,12 @@ pub struct ActiveSecretStats {
     pub active_storage_bytes: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConsumeSecretResult {
+    Consumed(SecretRecord),
+    NotFound,
+    KeyMismatch,
+}
 
 #[allow(dead_code)]
 impl SecretStore {
@@ -178,9 +188,10 @@ impl SecretStore {
                     expires_at,
                     consumed_at,
                     delete_token_hash,
+                    key_digest,
                     size_bytes,
                     requester_ip_hash
-                ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9)",
                 params![
                     &secret.id,
                     &secret.ciphertext,
@@ -188,6 +199,7 @@ impl SecretStore {
                     secret.created_at,
                     secret.expires_at,
                     &secret.delete_token_hash,
+                    &secret.key_digest,
                     i64::try_from(secret.size_bytes)
                         .context("secret size exceeds SQLite integer range")?,
                     &secret.requester_ip_hash,
@@ -210,6 +222,7 @@ impl SecretStore {
                     expires_at,
                     consumed_at,
                     delete_token_hash,
+                    key_digest,
                     size_bytes,
                     requester_ip_hash
                  FROM secrets
@@ -387,6 +400,7 @@ impl SecretStore {
                         expires_at,
                         consumed_at,
                         delete_token_hash,
+                        key_digest,
                         size_bytes,
                         requester_ip_hash
                      FROM secrets
@@ -416,6 +430,57 @@ impl SecretStore {
         })
     }
 
+    pub fn consume_unexpired_secret_by_id_and_key_digest(
+        &self,
+        secret_id: &str,
+        key_digest: &str,
+        now_timestamp: i64,
+    ) -> Result<ConsumeSecretResult> {
+        self.with_immediate_transaction(|connection| {
+            let secret = connection
+                .query_row(
+                    "SELECT
+                        id,
+                        ciphertext,
+                        nonce,
+                        created_at,
+                        expires_at,
+                        consumed_at,
+                        delete_token_hash,
+                        key_digest,
+                        size_bytes,
+                        requester_ip_hash
+                     FROM secrets
+                     WHERE id = ?1
+                       AND expires_at > ?2
+                       AND consumed_at IS NULL",
+                    params![secret_id, now_timestamp],
+                    map_secret_row,
+                )
+                .optional()
+                .context("failed to load secret for keyed consumption")?;
+
+            let Some(secret) = secret else {
+                return Ok(ConsumeSecretResult::NotFound);
+            };
+
+            if !secret.key_digest.is_empty() && secret.key_digest != key_digest {
+                return Ok(ConsumeSecretResult::KeyMismatch);
+            }
+
+            let deleted_rows = connection
+                .execute("DELETE FROM secrets WHERE id = ?1", [secret_id])
+                .context("failed to delete consumed secret")?;
+
+            ensure!(
+                deleted_rows == 1,
+                "expected to delete exactly one secret during keyed consumption"
+            );
+
+            Ok(ConsumeSecretResult::Consumed(secret))
+        })
+    }
+
     pub fn with_immediate_transaction<T, F>(&self, operation: F) -> Result<T>
     where
         F: FnOnce(&Connection) -> Result<T>,
@@ -436,7 +501,7 @@ impl SecretStore {
 
 #[allow(dead_code)]
 fn map_secret_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SecretRecord> {
-    let size_bytes: i64 = row.get(7)?;
+    let size_bytes: i64 = row.get(8)?;
 
     Ok(SecretRecord {
         id: row.get(0)?,
@@ -446,15 +511,49 @@ fn map_secret_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SecretRecord> {
         expires_at: row.get(4)?,
         consumed_at: row.get(5)?,
         delete_token_hash: row.get(6)?,
+        key_digest: row.get(7)?,
         size_bytes: u64::try_from(size_bytes).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                7,
+                8,
                 rusqlite::types::Type::Integer,
                 Box::new(error),
             )
         })?,
-        requester_ip_hash: row.get(8)?,
+        requester_ip_hash: row.get(9)?,
     })
+}
+
+fn ensure_secrets_key_digest_column(connection: &Connection) -> Result<()> {
+    if table_has_column(connection, "secrets", "key_digest")? {
+        return Ok(());
+    }
+
+    connection
+        .execute(
+            "ALTER TABLE secrets ADD COLUMN key_digest TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .context("failed to add secrets.key_digest column")?;
+
+    Ok(())
+}
+
+fn table_has_column(connection: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .with_context(|| format!("failed to inspect schema for table {table}"))?;
+    let mut rows = statement
+        .query([])
+        .with_context(|| format!("failed to query schema for table {table}"))?;
+
+    while let Some(row) = rows.next().context("failed to iterate schema rows")? {
+        let column_name: String = row.get(1).context("failed to read schema column name")?;
+        if column_name == column {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -470,7 +569,10 @@ mod tests {
     use rusqlite::Connection;
     use rusqlite::params;
 
-    use super::{ActiveSecretStats, Database, NewSecretRecord, SecretStore};
+    use super::{
+        ActiveSecretStats, ConsumeSecretResult, Database, NewSecretRecord, SecretStore,
+        table_has_column,
+    };
     use crate::{config::AppConfig, rate_limit::RateLimitBucket};
 
     #[test]
@@ -542,6 +644,7 @@ mod tests {
 
         assert!(schema_object_exists(&connection, "table", "secrets"));
         assert!(schema_object_exists(&connection, "table", "rate_limits"));
+        assert!(table_has_column(&connection, "secrets", "key_digest").expect("schema check"));
         assert!(schema_object_exists(
             &connection,
             "index",
@@ -589,6 +692,54 @@ mod tests {
     }
 
     #[test]
+    fn initialize_schema_migrates_legacy_secrets_table() {
+        let mut config = AppConfig::default();
+        let temp_root = unique_temp_dir("sqlite-legacy-migration");
+        config.database_path = temp_root.join("secrets.db");
+
+        let database = Database::connect(&config).expect("database should open");
+        let connection = database
+            .open_connection()
+            .expect("database connection should open");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE secrets (
+                  id TEXT PRIMARY KEY,
+                  ciphertext TEXT NOT NULL,
+                  nonce TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  expires_at INTEGER NOT NULL,
+                  consumed_at INTEGER,
+                  delete_token_hash TEXT NOT NULL,
+                  size_bytes INTEGER NOT NULL,
+                  requester_ip_hash TEXT
+                );
+
+                CREATE TABLE rate_limits (
+                  key TEXT NOT NULL,
+                  bucket INTEGER NOT NULL,
+                  count INTEGER NOT NULL,
+                  PRIMARY KEY (key, bucket)
+                );
+                "#,
+            )
+            .expect("legacy schema should be created");
+        drop(connection);
+
+        database
+            .initialize_schema()
+            .expect("schema migration should succeed");
+
+        let connection = database
+            .open_connection()
+            .expect("database connection should open");
+        assert!(table_has_column(&connection, "secrets", "key_digest").expect("schema check"));
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
     fn bootstrap_opens_database_and_initializes_schema() {
         let mut config = AppConfig::default();
         let temp_root = unique_temp_dir("sqlite-bootstrap");
@@ -601,6 +752,7 @@ mod tests {
 
         assert!(schema_object_exists(&connection, "table", "secrets"));
         assert!(schema_object_exists(&connection, "table", "rate_limits"));
+        assert!(table_has_column(&connection, "secrets", "key_digest").expect("schema check"));
         assert_eq!(database.path(), config.database_path.as_path());
 
         cleanup_temp_dir(&temp_root);
@@ -627,6 +779,7 @@ mod tests {
         assert_eq!(stored.expires_at, new_secret.expires_at);
         assert_eq!(stored.consumed_at, None);
         assert_eq!(stored.delete_token_hash, new_secret.delete_token_hash);
+        assert_eq!(stored.key_digest, new_secret.key_digest);
         assert_eq!(stored.size_bytes, new_secret.size_bytes);
         assert_eq!(stored.requester_ip_hash, new_secret.requester_ip_hash);
 
@@ -847,6 +1000,7 @@ mod tests {
         assert_eq!(consumed.ciphertext, new_secret.ciphertext);
         assert_eq!(consumed.nonce, new_secret.nonce);
         assert_eq!(consumed.delete_token_hash, new_secret.delete_token_hash);
+        assert_eq!(consumed.key_digest, new_secret.key_digest);
         assert!(
             store
                 .get_secret_by_id(&new_secret.id)
@@ -875,6 +1029,35 @@ mod tests {
 
         assert!(first.is_some());
         assert!(second.is_none());
+
+        cleanup_temp_dir(&temp_root);
+    }
+
+    #[test]
+    fn keyed_consume_rejects_wrong_digest_without_deleting_secret() {
+        let (temp_root, store) = setup_secret_store("secret-store-keyed-mismatch");
+        let mut new_secret = sample_secret("secret-keyed-mismatch", 1_700_000_000, 1_700_086_400);
+        new_secret.key_digest = "expected-key-digest".to_owned();
+
+        store
+            .insert_secret(&new_secret)
+            .expect("secret insertion should succeed");
+
+        let result = store
+            .consume_unexpired_secret_by_id_and_key_digest(
+                &new_secret.id,
+                "wrong-key-digest",
+                1_700_000_100,
+            )
+            .expect("keyed consume should succeed");
+
+        assert_eq!(result, ConsumeSecretResult::KeyMismatch);
+        assert!(
+            store
+                .get_secret_by_id(&new_secret.id)
+                .expect("secret lookup should succeed")
+                .is_some()
+        );
 
         cleanup_temp_dir(&temp_root);
     }
@@ -1088,6 +1271,7 @@ mod tests {
             created_at,
             expires_at,
             delete_token_hash: "delete-token-hash".to_owned(),
+            key_digest: String::new(),
             size_bytes: 10,
             requester_ip_hash: Some("ip-hash".to_owned()),
         }

@@ -264,10 +264,12 @@ test("bootReadPage decrypts the payload locally and removes the fragment from th
   const plaintext = "top secret"
   const cryptoApp = loadApp()
   const encrypted = await cryptoApp.hooks.encryptPlaintext(plaintext)
+  let fetchHeaders = null
 
   const app = loadApp({
-    fetchImpl: async () =>
-      new Response(
+    fetchImpl: async (_url, options) => {
+      fetchHeaders = options.headers
+      return new Response(
         JSON.stringify({
           ciphertext: cryptoApp.hooks.bytesToBase64Url(encrypted.ciphertext),
           nonce: cryptoApp.hooks.bytesToBase64Url(encrypted.nonce),
@@ -278,7 +280,8 @@ test("bootReadPage decrypts the payload locally and removes the fragment from th
             "Content-Type": "application/json",
           },
         },
-      ),
+      )
+    },
   })
   const root = setupReadPage(app, "read-secret")
   const decryptButton = app.document.getElementById("decrypt-secret-button")
@@ -291,6 +294,11 @@ test("bootReadPage decrypts the payload locally and removes the fragment from th
   await app.hooks.bootReadPage(root)
   await decryptButton.trigger("click")
 
+  assert.ok(fetchHeaders)
+  assert.equal(
+    fetchHeaders["X-Psst-Key-Digest"],
+    await cryptoApp.hooks.computeKeyDigest(encrypted.rawKey),
+  )
   assert.equal(app.history.calls.length, 1)
   assert.deepEqual(app.history.calls[0], [null, "", "/s/read-secret?utm=test"])
   assert.equal(app.locationLike.hash, "")
@@ -303,4 +311,36 @@ test("bootReadPage decrypts the payload locally and removes the fragment from th
   )
   assert.equal(decryptButton.disabled, true)
   assert.equal(decryptButton.textContent, "Secret already read")
+})
+
+test("bootReadPage restores the button when the server rejects the key digest", async () => {
+  const cryptoApp = loadApp()
+  const encrypted = await cryptoApp.hooks.encryptPlaintext("top secret")
+  const app = loadApp({
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          error: "invalid read key",
+        }),
+        {
+          status: 400,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      ),
+  })
+  const root = setupReadPage(app, "read-secret")
+  const decryptButton = app.document.getElementById("decrypt-secret-button")
+  app.locationLike.hash = `#${cryptoApp.hooks.bytesToBase64Url(encrypted.rawKey)}`
+
+  await app.hooks.bootReadPage(root)
+  await decryptButton.trigger("click")
+
+  assert.equal(
+    app.document.getElementById("read-status").textContent,
+    "Invalid key or corrupted data. Check the full link.",
+  )
+  assert.equal(decryptButton.disabled, false)
+  assert.equal(decryptButton.textContent, "Decrypt secret")
 })

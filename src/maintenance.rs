@@ -34,11 +34,7 @@ impl MaintenanceRunStats {
     }
 }
 
-pub fn spawn_periodic_maintenance(
-    config: AppConfig,
-    database: Database,
-    metrics: Arc<AppMetrics>,
-) {
+pub fn spawn_periodic_maintenance(config: AppConfig, database: Database, metrics: Arc<AppMetrics>) {
     use std::sync::atomic::Ordering::Relaxed;
 
     let interval = Duration::from_secs(config.maintenance_interval_seconds);
@@ -170,7 +166,7 @@ mod tests {
         config::AppConfig,
         db::{Database, NewSecretRecord, SecretStore},
         rate_limit::RateLimitBucket,
-        secret::{generate_secret_reference, hash_delete_token},
+        secret::{generate_secret_reference, hash_delete_token, hash_read_key},
     };
 
     #[test]
@@ -346,6 +342,7 @@ mod tests {
             created_at,
             expires_at,
             delete_token_hash: hash_delete_token(&generated.delete_token),
+            key_digest: hash_read_key(b"0123456789abcdef0123456789abcdef"),
             size_bytes: 32,
             requester_ip_hash: None,
         }

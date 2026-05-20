@@ -9,7 +9,7 @@ use axum::{
     body::Body,
     extract::{ConnectInfo, DefaultBodyLimit, Extension, MatchedPath, Path, Request, State},
     http::{
-        HeaderValue, Response, StatusCode,
+        HeaderMap, HeaderValue, Response, StatusCode,
         header::{
             self, CONTENT_SECURITY_POLICY, HeaderName, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS,
             X_FRAME_OPTIONS,
@@ -32,14 +32,14 @@ use tracing::info;
 
 use crate::{
     config::AppConfig,
-    db::{ActiveSecretStats, Database, NewSecretRecord, SecretStore},
+    db::{ActiveSecretStats, ConsumeSecretResult, Database, NewSecretRecord, SecretStore},
     metrics::AppMetrics,
     rate_limit::RateLimitBucket,
     request_context::ClientIp,
     secret::{
         ALLOWED_TTL_SECONDS, CreateSecretRequest, CreateSecretResponse, DeleteSecretRequest,
         DeleteSecretResponse, ReadSecretResponse, generate_secret_reference, hash_delete_token,
-        is_allowed_ttl,
+        is_allowed_ttl, is_valid_read_key_digest,
     },
 };
 
@@ -48,6 +48,7 @@ type TurnstileHttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, F
 const APP_CSS: &str = include_str!("../static/app.css");
 const APP_JS: &str = include_str!("../static/app.js");
 const RATE_LIMIT_EXCEEDED_MESSAGE: &str = "rate limit exceeded";
+const READ_KEY_DIGEST_HEADER: &str = "x-psst-key-digest";
 
 const HTML_CSP: &str = concat!(
     "default-src 'self'; ",
@@ -209,16 +210,28 @@ async fn create_secret_stub(
     let validated = validate_create_request(&state.config, &payload).map_err(|(e, reason)| {
         match reason {
             CreateRejectedReason::TooLarge => {
-                state.metrics.create_rejected_too_large.fetch_add(1, Relaxed);
+                state
+                    .metrics
+                    .create_rejected_too_large
+                    .fetch_add(1, Relaxed);
             }
             CreateRejectedReason::InvalidTtl => {
-                state.metrics.create_rejected_invalid_ttl.fetch_add(1, Relaxed);
+                state
+                    .metrics
+                    .create_rejected_invalid_ttl
+                    .fetch_add(1, Relaxed);
             }
             CreateRejectedReason::InvalidPayload => {
-                state.metrics.create_rejected_invalid_payload.fetch_add(1, Relaxed);
+                state
+                    .metrics
+                    .create_rejected_invalid_payload
+                    .fetch_add(1, Relaxed);
             }
             CreateRejectedReason::StorageLimit => {
-                state.metrics.create_rejected_storage_limit.fetch_add(1, Relaxed);
+                state
+                    .metrics
+                    .create_rejected_storage_limit
+                    .fetch_add(1, Relaxed);
             }
         }
         e
@@ -231,15 +244,22 @@ async fn create_secret_stub(
 
     ensure_create_enabled(&state.config)?;
 
-    enforce_global_create_quotas(&state, now_timestamp, validated.ciphertext_size_bytes)
-        .map_err(|(e, _)| {
-            state.metrics.create_rejected_storage_limit.fetch_add(1, Relaxed);
+    enforce_global_create_quotas(&state, now_timestamp, validated.ciphertext_size_bytes).map_err(
+        |(e, _)| {
+            state
+                .metrics
+                .create_rejected_storage_limit
+                .fetch_add(1, Relaxed);
             e
-        })?;
+        },
+    )?;
 
     check_create_rate_limit_hook(&state, requester_ip_hash.as_deref(), now_timestamp).map_err(
         |e| {
-            state.metrics.create_rejected_rate_limited.fetch_add(1, Relaxed);
+            state
+                .metrics
+                .create_rejected_rate_limited
+                .fetch_add(1, Relaxed);
             state.metrics.rate_limited_create.fetch_add(1, Relaxed);
             e
         },
@@ -248,7 +268,10 @@ async fn create_secret_stub(
     verify_turnstile(&state, client_ip.map(|client_ip| client_ip.0), &payload)
         .await
         .map_err(|e| {
-            state.metrics.create_rejected_turnstile_failed.fetch_add(1, Relaxed);
+            state
+                .metrics
+                .create_rejected_turnstile_failed
+                .fetch_add(1, Relaxed);
             e
         })?;
 
@@ -267,6 +290,7 @@ async fn create_secret_stub(
         created_at: now_timestamp,
         expires_at,
         delete_token_hash: generated.delete_token_hash,
+        key_digest: payload.key_digest,
         size_bytes: validated.ciphertext_size_bytes,
         requester_ip_hash,
     };
@@ -281,10 +305,10 @@ async fn create_secret_stub(
 
     state.metrics.secrets_created.fetch_add(1, Relaxed);
     state.metrics.active_secrets.fetch_add(1, Relaxed);
-    state
-        .metrics
-        .storage_bytes
-        .fetch_add(i64::try_from(validated.ciphertext_size_bytes).unwrap_or(0), Relaxed);
+    state.metrics.storage_bytes.fetch_add(
+        i64::try_from(validated.ciphertext_size_bytes).unwrap_or(0),
+        Relaxed,
+    );
 
     Ok(Json(CreateSecretResponse {
         id: generated.secret_id,
@@ -296,10 +320,12 @@ async fn read_secret(
     axum::extract::State(state): axum::extract::State<AppState>,
     client_ip: Option<Extension<ClientIp>>,
     Path(secret_id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<ReadSecretResponse>, ApiError> {
     use std::sync::atomic::Ordering::Relaxed;
 
     let now_timestamp = current_timestamp()?;
+    let key_digest = extract_read_key_digest(&headers)?;
     let requester_ip_hash = client_ip
         .map(|Extension(client_ip)| client_ip.hashed_identifier(&state.config.ip_hash_salt));
 
@@ -310,17 +336,23 @@ async fn read_secret(
 
     let secret = state
         .secret_store
-        .consume_unexpired_secret_by_id(&secret_id, now_timestamp)
+        .consume_unexpired_secret_by_id_and_key_digest(&secret_id, &key_digest, now_timestamp)
         .map_err(|error| {
             state.metrics.db_errors_read.fetch_add(1, Relaxed);
             ApiError::internal(format!("failed to load secret: {error}"))
         })?;
 
-    let Some(secret) = secret else {
-        return Err(ApiError {
-            status: StatusCode::NOT_FOUND,
-            message: "secret not found".to_owned(),
-        });
+    let secret = match secret {
+        ConsumeSecretResult::Consumed(secret) => secret,
+        ConsumeSecretResult::NotFound => {
+            return Err(ApiError {
+                status: StatusCode::NOT_FOUND,
+                message: "secret not found".to_owned(),
+            });
+        }
+        ConsumeSecretResult::KeyMismatch => {
+            return Err(ApiError::bad_request("invalid read key"));
+        }
     };
 
     state.metrics.secrets_read.fetch_add(1, Relaxed);
@@ -598,18 +630,30 @@ fn validate_create_request(
         ));
     }
 
-    if u64::try_from(payload.nonce.len())
-        .map_err(|_| {
-            (
-                ApiError::bad_request("nonce is too large"),
-                CreateRejectedReason::TooLarge,
-            )
-        })?
-        > config.max_ciphertext_bytes
+    if u64::try_from(payload.nonce.len()).map_err(|_| {
+        (
+            ApiError::bad_request("nonce is too large"),
+            CreateRejectedReason::TooLarge,
+        )
+    })? > config.max_ciphertext_bytes
     {
         return Err((
             ApiError::bad_request("nonce exceeds the configured size limit"),
             CreateRejectedReason::TooLarge,
+        ));
+    }
+
+    if payload.key_digest.is_empty() {
+        return Err((
+            ApiError::bad_request("key_digest must not be empty"),
+            CreateRejectedReason::InvalidPayload,
+        ));
+    }
+
+    if !is_valid_read_key_digest(&payload.key_digest) {
+        return Err((
+            ApiError::bad_request("key_digest must be a valid SHA-256 base64url digest"),
+            CreateRejectedReason::InvalidPayload,
         ));
     }
 
@@ -631,6 +675,21 @@ fn validate_create_request(
         ciphertext_size_bytes,
         expires_in_seconds: payload.expires_in_seconds,
     })
+}
+
+fn extract_read_key_digest(headers: &HeaderMap) -> Result<String, ApiError> {
+    let raw_value = headers
+        .get(READ_KEY_DIGEST_HEADER)
+        .ok_or_else(|| ApiError::bad_request("missing read key digest"))?;
+    let key_digest = raw_value
+        .to_str()
+        .map_err(|_| ApiError::bad_request("read key digest header must be valid ASCII"))?;
+
+    if !is_valid_read_key_digest(key_digest) {
+        return Err(ApiError::bad_request("invalid read key digest"));
+    }
+
+    Ok(key_digest.to_owned())
 }
 
 fn ensure_create_enabled(config: &AppConfig) -> Result<(), ApiError> {
@@ -858,7 +917,10 @@ mod tests {
     use tower::util::ServiceExt;
     use tracing_subscriber::fmt::MakeWriter;
 
-    use super::{build_router, current_timestamp, log_request_completed, matched_path_or_uri};
+    use super::{
+        READ_KEY_DIGEST_HEADER, build_router, current_timestamp, log_request_completed,
+        matched_path_or_uri,
+    };
     use crate::{
         config::AppConfig,
         db::{Database, NewSecretRecord},
@@ -1029,8 +1091,9 @@ mod tests {
     async fn create_route_rejects_oversized_json_bodies() {
         let (_guard, app, _database) = test_router("oversized-json", AppConfig::default());
         let oversized_body = format!(
-            r#"{{"ciphertext":"{}","nonce":"n","expires_in_seconds":1,"turnstile_token":"t"}}"#,
-            "a".repeat(40_000)
+            r#"{{"ciphertext":"{}","nonce":"n","key_digest":"{}","expires_in_seconds":1,"turnstile_token":"t"}}"#,
+            "a".repeat(40_000),
+            test_key_digest()
         );
 
         let response = app
@@ -1062,12 +1125,18 @@ mod tests {
                 Request::builder()
                     .method(Method::POST)
                     .uri("/api/create")
-                    .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 12345))))
+                    .extension(ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        12345,
+                    ))))
                     .header("cf-connecting-ip", "203.0.113.10")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"valid-turnstile-token"}"#,
-                    ))
+                    .body(Body::from(create_request_body(
+                        "ciphertext-value",
+                        "nonce-value",
+                        86400,
+                        "valid-turnstile-token",
+                    )))
                     .expect("request should build"),
             )
             .await
@@ -1094,14 +1163,15 @@ mod tests {
             .expect("database connection should open");
         let stored = connection
             .query_row(
-                "SELECT ciphertext, nonce, delete_token_hash, requester_ip_hash FROM secrets WHERE id = ?1",
+                "SELECT ciphertext, nonce, delete_token_hash, key_digest, requester_ip_hash FROM secrets WHERE id = ?1",
                 [secret_id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
                     ))
                 },
             )
@@ -1110,7 +1180,8 @@ mod tests {
         assert_eq!(stored.0, "ciphertext-value");
         assert_eq!(stored.1, "nonce-value");
         assert_eq!(stored.2, hash_delete_token(delete_token));
-        assert_eq!(stored.3, Some(expected_requester_ip_hash));
+        assert_eq!(stored.3, test_key_digest());
+        assert_eq!(stored.4, Some(expected_requester_ip_hash));
     }
 
     #[tokio::test]
@@ -1126,9 +1197,12 @@ mod tests {
                     .method(Method::POST)
                     .uri("/api/create")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"invalid-turnstile-token"}"#,
-                    ))
+                    .body(Body::from(create_request_body(
+                        "ciphertext-value",
+                        "nonce-value",
+                        86400,
+                        "invalid-turnstile-token",
+                    )))
                     .expect("request should build"),
             )
             .await
@@ -1149,9 +1223,12 @@ mod tests {
                     .method(Method::POST)
                     .uri("/api/create")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"valid-turnstile-token"}"#,
-                    ))
+                    .body(Body::from(create_request_body(
+                        "ciphertext-value",
+                        "nonce-value",
+                        86400,
+                        "valid-turnstile-token",
+                    )))
                     .expect("request should build"),
             )
             .await
@@ -1170,9 +1247,12 @@ mod tests {
                     .method(Method::POST)
                     .uri("/api/create")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":42,"turnstile_token":"dummy-token"}"#,
-                    ))
+                    .body(Body::from(create_request_body(
+                        "ciphertext-value",
+                        "nonce-value",
+                        42,
+                        "dummy-token",
+                    )))
                     .expect("request should build"),
             )
             .await
@@ -1193,9 +1273,12 @@ mod tests {
                     .method(Method::POST)
                     .uri("/api/create")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":900,"turnstile_token":"dummy-token"}"#,
-                    ))
+                    .body(Body::from(create_request_body(
+                        "ciphertext-value",
+                        "nonce-value",
+                        900,
+                        "dummy-token",
+                    )))
                     .expect("request should build"),
             )
             .await
@@ -1217,9 +1300,12 @@ mod tests {
                     .method(Method::POST)
                     .uri("/api/create")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"dummy-token"}"#,
-                    ))
+                    .body(Body::from(create_request_body(
+                        "ciphertext-value",
+                        "nonce-value",
+                        86400,
+                        "dummy-token",
+                    )))
                     .expect("request should build"),
             )
             .await
@@ -1240,9 +1326,12 @@ mod tests {
                     .method(Method::POST)
                     .uri("/api/create")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"dummy-token"}"#,
-                    ))
+                    .body(Body::from(create_request_body(
+                        "ciphertext-value",
+                        "nonce-value",
+                        86400,
+                        "dummy-token",
+                    )))
                     .expect("request should build"),
             )
             .await
@@ -1266,12 +1355,18 @@ mod tests {
                     Request::builder()
                         .method(Method::POST)
                         .uri("/api/create")
-                        .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 12345))))
+                        .extension(ConnectInfo(std::net::SocketAddr::from((
+                            [127, 0, 0, 1],
+                            12345,
+                        ))))
                         .header("cf-connecting-ip", "203.0.113.10")
                         .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from(
-                            r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"valid-turnstile-token"}"#,
-                        ))
+                        .body(Body::from(create_request_body(
+                            "ciphertext-value",
+                            "nonce-value",
+                            86400,
+                            "valid-turnstile-token",
+                        )))
                         .expect("request should build"),
                 )
                 .await
@@ -1297,12 +1392,18 @@ mod tests {
                     Request::builder()
                         .method(Method::POST)
                         .uri("/api/create")
-                        .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 12345))))
+                        .extension(ConnectInfo(std::net::SocketAddr::from((
+                            [127, 0, 0, 1],
+                            12345,
+                        ))))
                         .header("cf-connecting-ip", "203.0.113.10")
                         .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from(
-                            r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"valid-turnstile-token"}"#,
-                        ))
+                        .body(Body::from(create_request_body(
+                            "ciphertext-value",
+                            "nonce-value",
+                            86400,
+                            "valid-turnstile-token",
+                        )))
                         .expect("request should build"),
                 )
                 .await
@@ -1329,9 +1430,12 @@ mod tests {
                         .method(Method::POST)
                         .uri("/api/create")
                         .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from(
-                            r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":86400,"turnstile_token":"valid-turnstile-token"}"#,
-                        ))
+                        .body(Body::from(create_request_body(
+                            "ciphertext-value",
+                            "nonce-value",
+                            86400,
+                            "valid-turnstile-token",
+                        )))
                         .expect("request should build"),
                 )
                 .await
@@ -1360,12 +1464,18 @@ mod tests {
                 Request::builder()
                     .method(Method::POST)
                     .uri("/api/create")
-                    .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 12345))))
+                    .extension(ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        12345,
+                    ))))
                     .header("cf-connecting-ip", "203.0.113.10")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":900,"turnstile_token":"dummy-token"}"#,
-                    ))
+                    .body(Body::from(create_request_body(
+                        "ciphertext-value",
+                        "nonce-value",
+                        900,
+                        "dummy-token",
+                    )))
                     .expect("request should build"),
             )
             .await
@@ -1392,9 +1502,12 @@ mod tests {
                     .method(Method::POST)
                     .uri("/api/create")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":900,"turnstile_token":"dummy-token"}"#,
-                    ))
+                    .body(Body::from(create_request_body(
+                        "ciphertext-value",
+                        "nonce-value",
+                        900,
+                        "dummy-token",
+                    )))
                     .expect("request should build"),
             )
             .await
@@ -1415,9 +1528,12 @@ mod tests {
                     .method(Method::POST)
                     .uri("/api/create")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"ciphertext":"ciphertext-value","nonce":"nonce-value","expires_in_seconds":900,"turnstile_token":"dummy-token"}"#,
-                    ))
+                    .body(Body::from(create_request_body(
+                        "ciphertext-value",
+                        "nonce-value",
+                        900,
+                        "dummy-token",
+                    )))
                     .expect("request should build"),
             )
             .await
@@ -1441,6 +1557,7 @@ mod tests {
                 Request::builder()
                     .method(Method::GET)
                     .uri(format!("/api/secrets/{}", generated.secret_id))
+                    .header(READ_KEY_DIGEST_HEADER, test_key_digest())
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -1478,6 +1595,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_route_rejects_wrong_key_without_consuming_secret() {
+        let (_guard, app, database) = test_router("read-wrong-key", AppConfig::default());
+        let generated = insert_test_secret(
+            &database,
+            "ciphertext-read-wrong-key",
+            "nonce-read-wrong-key",
+            current_timestamp().expect("current timestamp should exist") + 3600,
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/api/secrets/{}", generated.secret_id))
+                    .header(
+                        READ_KEY_DIGEST_HEADER,
+                        crate::secret::hash_read_key(b"wrong-key"),
+                    )
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let connection = database
+            .open_connection()
+            .expect("database connection should open");
+        let remaining: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM secrets WHERE id = ?1",
+                [generated.secret_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("count query should succeed");
+
+        assert_eq!(remaining, 1);
+    }
+
+    #[tokio::test]
     async fn read_route_returns_404_on_second_read() {
         let (_guard, app, database) = test_router("read-twice", AppConfig::default());
         let generated = insert_test_secret(
@@ -1493,6 +1651,7 @@ mod tests {
                 Request::builder()
                     .method(Method::GET)
                     .uri(format!("/api/secrets/{}", generated.secret_id))
+                    .header(READ_KEY_DIGEST_HEADER, test_key_digest())
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -1503,6 +1662,7 @@ mod tests {
                 Request::builder()
                     .method(Method::GET)
                     .uri(format!("/api/secrets/{}", generated.secret_id))
+                    .header(READ_KEY_DIGEST_HEADER, test_key_digest())
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -1533,6 +1693,7 @@ mod tests {
                     12345,
                 ))))
                 .header("cf-connecting-ip", "203.0.113.10")
+                .header(READ_KEY_DIGEST_HEADER, test_key_digest())
                 .body(Body::empty())
                 .expect("request should build")
         };
@@ -1577,6 +1738,7 @@ mod tests {
                     Request::builder()
                         .method(Method::GET)
                         .uri(format!("/api/secrets/{secret_id}"))
+                        .header(READ_KEY_DIGEST_HEADER, test_key_digest())
                         .body(Body::empty())
                         .expect("request should build"),
                 )
@@ -1602,6 +1764,7 @@ mod tests {
                 Request::builder()
                     .method(Method::GET)
                     .uri(format!("/api/secrets/{}", generated.secret_id))
+                    .header(READ_KEY_DIGEST_HEADER, test_key_digest())
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -1633,6 +1796,7 @@ mod tests {
                 Request::builder()
                     .method(Method::GET)
                     .uri("/api/secrets/does-not-exist")
+                    .header(READ_KEY_DIGEST_HEADER, test_key_digest())
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -1841,13 +2005,13 @@ mod tests {
             "psst_config_create_enabled",
             "psst_build_info",
         ] {
-            assert!(
-                text.contains(metric),
-                "metrics output missing: {metric}"
-            );
+            assert!(text.contains(metric), "metrics output missing: {metric}");
         }
 
-        assert!(text.ends_with('\n'), "metrics output should end with newline");
+        assert!(
+            text.ends_with('\n'),
+            "metrics output should end with newline"
+        );
     }
 
     #[tokio::test]
@@ -1911,9 +2075,18 @@ mod tests {
             .expect("body should be readable");
         let text = String::from_utf8(body.to_vec()).expect("body should be utf-8");
 
-        assert!(!text.contains("test-turnstile-secret-key"), "secret key must not appear");
-        assert!(!text.contains("test-ip-hash-salt"), "ip hash salt must not appear");
-        assert!(!text.contains("test-turnstile-site-key"), "site key must not appear");
+        assert!(
+            !text.contains("test-turnstile-secret-key"),
+            "secret key must not appear"
+        );
+        assert!(
+            !text.contains("test-ip-hash-salt"),
+            "ip hash salt must not appear"
+        );
+        assert!(
+            !text.contains("test-turnstile-site-key"),
+            "site key must not appear"
+        );
     }
 
     #[tokio::test]
@@ -1930,9 +2103,12 @@ mod tests {
                     .method(Method::POST)
                     .uri("/api/create")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"ciphertext":"ct","nonce":"nn","expires_in_seconds":86400,"turnstile_token":"valid-turnstile-token"}"#,
-                    ))
+                    .body(Body::from(create_request_body(
+                        "ct",
+                        "nn",
+                        86400,
+                        "valid-turnstile-token",
+                    )))
                     .expect("request should build"),
             )
             .await
@@ -1953,7 +2129,10 @@ mod tests {
             .await
             .expect("body should be readable");
         let text = String::from_utf8(body.to_vec()).expect("body should be utf-8");
-        assert!(text.contains("psst_secrets_created_total 1"), "created counter should be 1");
+        assert!(
+            text.contains("psst_secrets_created_total 1"),
+            "created counter should be 1"
+        );
     }
 
     fn header_value(value: &'static str) -> header::HeaderValue {
@@ -2045,6 +2224,22 @@ mod tests {
         }))
     }
 
+    fn test_key_digest() -> String {
+        crate::secret::hash_read_key(b"0123456789abcdef0123456789abcdef")
+    }
+
+    fn create_request_body(
+        ciphertext: &str,
+        nonce: &str,
+        expires_in_seconds: u64,
+        turnstile_token: &str,
+    ) -> String {
+        format!(
+            r#"{{"ciphertext":"{ciphertext}","nonce":"{nonce}","key_digest":"{}","expires_in_seconds":{expires_in_seconds},"turnstile_token":"{turnstile_token}"}}"#,
+            test_key_digest()
+        )
+    }
+
     fn insert_test_secret(
         database: &Database,
         ciphertext: &str,
@@ -2063,6 +2258,7 @@ mod tests {
                 created_at: now_timestamp,
                 expires_at,
                 delete_token_hash: hash_delete_token(&generated.delete_token),
+                key_digest: test_key_digest(),
                 size_bytes: u64::try_from(ciphertext.len()).expect("ciphertext len should fit"),
                 requester_ip_hash: None,
             })
