@@ -12,11 +12,8 @@ use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
-    config::AppConfig,
-    db::Database,
-    http::build_router_with_metrics,
-    maintenance::spawn_periodic_maintenance,
-    metrics::AppMetrics,
+    config::AppConfig, db::Database, http::build_router_with_metrics,
+    maintenance::spawn_periodic_maintenance, metrics::AppMetrics,
 };
 
 #[tokio::main]
