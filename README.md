@@ -54,10 +54,10 @@ flowchart TD
             SG2["Admin CIDRs → TCP :22"]
         end
 
-        nginx["nginx\n:80 → 301 HTTPS redirect\n:443 TLS with Cloudflare Origin CA cert\nclient_max_body_size 64 kB"]
+        ReverseProxy["Reverse Proxy\n:80 → 301 HTTPS redirect\n:443 TLS with Cloudflare Origin CA cert\nrequest body size limit 64 kB"]
 
         subgraph psst["psst-rs · Rust / Axum / Tokio · 127.0.0.1:3000 · OpenRC"]
-            Routes["Routes\nGET /  ·  GET /s/{id}\nPOST /api/create  ·  GET /api/secrets/{id}\nPOST /api/delete/{id}  ·  GET /healthz"]
+            Routes["Routes\nGET /  ·  GET /s/{id}\nPOST /api/create  ·  GET /api/secrets/{id}\nPOST /api/delete/{id}  ·  GET /healthz  ·  GET /metrics"]
             RL["Rate Limiter\nIP pseudonymised with SHA-256 + salt\ncreate 5/min · 30/h  ·  read 60/min"]
             Maint["Maintenance Loop · every 5 min\ndelete expired secrets\npurge stale rate-limit buckets"]
         end
@@ -66,8 +66,8 @@ flowchart TD
     end
 
     UI -->|"HTTPS — Cloudflare cert"| CFProxy
-    CFProxy -->|"HTTPS — Origin CA cert"| nginx
-    nginx -->|"HTTP proxy_pass\nX-Real-IP · X-Forwarded-For"| Routes
+    CFProxy -->|"HTTPS — Origin CA cert"| ReverseProxy
+    ReverseProxy -->|"HTTP reverse proxy\nX-Real-IP · X-Forwarded-For"| Routes
     Routes --> RL
     Routes <-->|"atomic consume on read · insert · delete"| DB
     RL <-->|"increment / check counters"| DB
@@ -75,7 +75,7 @@ flowchart TD
     Routes -.->|"token verify · HTTPS outbound"| TurnstileAPI
 ```
 
-The Rust application is not meant to terminate TLS itself. It listens locally behind the reverse proxy. The firewall only allows Cloudflare egress IPs inbound on HTTP/HTTPS — direct access to the origin is blocked.
+The Rust application is not meant to terminate TLS itself. It listens locally behind a reverse proxy, which handles origin TLS, redirects, and request-size limits. The firewall only allows Cloudflare egress IPs inbound on HTTP/HTTPS — direct access to the origin is blocked.
 
 ## Prerequisites
 
